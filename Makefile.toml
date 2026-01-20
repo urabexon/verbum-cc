@@ -9,6 +9,10 @@ script = '''
 #!/usr/bin/env bash
 ./debug.sh 0 0
 ./debug.sh 42 42
+./debug.sh 47 "5+6*7"
+./debug.sh 25 "5*(9-4)"
+./debug.sh 6  "24/4"
+./debug.sh 4  "7-6/2"
 '''
 dependencies = [ "build" ]
 

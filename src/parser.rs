@@ -5,32 +5,72 @@ pub enum Expr {
     Num(i64),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
+    Mul(Box<Expr>, Box<Expr>),
+    Div(Box<Expr>, Box<Expr>),
 }
 
 pub fn parse(lexer: &mut Lexer) -> Expr {
-    let mut node = parse_num(lexer);
+    let node = parse_expr(lexer);
+    match lexer.consume_token() {
+        Token::Eof => node,
+        t => panic!("unexpected token at end: {:?}", t),
+    }
+}
+
+fn parse_expr(lexer: &mut Lexer) -> Expr {
+    let mut node = parse_term(lexer);
 
     loop {
-        match lexer.next_token() {
+        match lexer.peek_token() {
             Token::Plus => {
-                let rhs = parse_num(lexer);
+                lexer.consume_token();
+                let rhs = parse_term(lexer);
                 node = Expr::Add(Box::new(node), Box::new(rhs));
             }
             Token::Minus => {
-                let rhs = parse_num(lexer);
+                lexer.consume_token();
+                let rhs = parse_term(lexer);
                 node = Expr::Sub(Box::new(node), Box::new(rhs));
             }
-            Token::Eof => break,
-            t => panic!("unexpected token: {:?}", t),
+            _ => break,
         }
     }
 
     node
 }
 
-fn parse_num(lexer: &mut Lexer) -> Expr {
-    match lexer.next_token() {
+fn parse_term(lexer: &mut Lexer) -> Expr {
+    let mut node = parse_factor(lexer);
+
+    loop {
+        match lexer.peek_token() {
+            Token::Star => {
+                lexer.consume_token();
+                let rhs = parse_factor(lexer);
+                node = Expr::Mul(Box::new(node), Box::new(rhs));
+            }
+            Token::Slash => {
+                lexer.consume_token();
+                let rhs = parse_factor(lexer);
+                node = Expr::Div(Box::new(node), Box::new(rhs));
+            }
+            _ => break,
+        }
+    }
+
+    node
+}
+
+fn parse_factor(lexer: &mut Lexer) -> Expr {
+    match lexer.consume_token() {
         Token::Num(n) => Expr::Num(n),
-        t => panic!("expected number, got {:?}", t),
+        Token::LParen => {
+            let node = parse_expr(lexer);
+            match lexer.consume_token() {
+                Token::RParen => node,
+                t => panic!("expected ')', got {:?}", t),
+            }
+        }
+        t => panic!("expected number or '(', got {:?}", t),
     }
 }

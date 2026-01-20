@@ -3,12 +3,17 @@ pub enum Token {
     Num(i64),
     Plus,
     Minus,
+    Star,
+    Slash,
+    LParen,
+    RParen,
     Eof,
 }
 
 pub struct Lexer<'a> {
     input: &'a [u8],
     pos: usize,
+    peeked: Option<Token>,
 }
 
 impl<'a> Lexer<'a> {
@@ -16,10 +21,27 @@ impl<'a> Lexer<'a> {
         Self {
             input: input.as_bytes(),
             pos: 0,
+            peeked: None,
         }
     }
 
-    pub fn next_token(&mut self) -> Token {
+    pub fn peek_token(&mut self) -> Token {
+        if let Some(t) = &self.peeked {
+            return t.clone();
+        }
+        let t = self.read_token();
+        self.peeked = Some(t.clone());
+        t
+    }
+
+    pub fn consume_token(&mut self) -> Token {
+        if let Some(t) = self.peeked.take() {
+            return t;
+        }
+        self.read_token()
+    }
+
+    fn read_token(&mut self) -> Token {
         while self.pos < self.input.len() && self.input[self.pos].is_ascii_whitespace() {
             self.pos += 1;
         }
@@ -30,13 +52,32 @@ impl<'a> Lexer<'a> {
 
         let c = self.input[self.pos];
 
-        if c == b'+' {
-            self.pos += 1;
-            return Token::Plus;
-        }
-        if c == b'-' {
-            self.pos += 1;
-            return Token::Minus;
+        match c {
+            b'+' => {
+                self.pos += 1;
+                return Token::Plus;
+            }
+            b'-' => {
+                self.pos += 1;
+                return Token::Minus;
+            }
+            b'*' => {
+                self.pos += 1;
+                return Token::Star;
+            }
+            b'/' => {
+                self.pos += 1;
+                return Token::Slash;
+            }
+            b'(' => {
+                self.pos += 1;
+                return Token::LParen;
+            }
+            b')' => {
+                self.pos += 1;
+                return Token::RParen;
+            }
+            _ => {}
         }
 
         if c.is_ascii_digit() {

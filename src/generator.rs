@@ -32,5 +32,21 @@ fn gen_expr(expr: &Expr, out: &mut String) {
             out.push_str("    sub rdi, rax\n");
             out.push_str("    mov rax, rdi\n");
         }
+        Expr::Mul(lhs, rhs) => {
+            gen_expr(lhs, out);
+            out.push_str("    push rax\n");
+            gen_expr(rhs, out);
+            out.push_str("    pop rdi\n");
+            out.push_str("    imul rax, rdi\n");
+        }
+        Expr::Div(lhs, rhs) => {
+            gen_expr(lhs, out);
+            out.push_str("    push rax\n");
+            gen_expr(rhs, out);
+            out.push_str("    mov rdi, rax\n");
+            out.push_str("    pop rax\n");
+            out.push_str("    cqo\n");
+            out.push_str("    idiv rdi\n");
+        }
     }
 }
