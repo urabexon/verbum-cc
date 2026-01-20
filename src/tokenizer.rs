@@ -2,6 +2,16 @@
 pub enum Token {
     Num(i64),
     Eof,
+    Plus,
+    Minus,
+    // Asterisk,
+    // Slash,
+    // Percent,
+    // Caret,
+    // Ampersand,
+    // Pipe,
+    // LessThan,
+    // GreaterThan,
 }
 
 pub fn tokenize(input: &str) -> Vec<Token> {
@@ -13,6 +23,18 @@ pub fn tokenize(input: &str) -> Vec<Token> {
         let c = bytes[i];
 
         if c.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+
+        if c == b'+' {
+            tokens.push(Token::Plus);
+            i += 1;
+            continue;
+        }
+
+        if c == b'-' {
+            tokens.push(Token::Minus);
             i += 1;
             continue;
         }
