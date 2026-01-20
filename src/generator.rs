@@ -48,5 +48,9 @@ fn gen_expr(expr: &Expr, out: &mut String) {
             out.push_str("    cqo\n");
             out.push_str("    idiv rdi\n");
         }
+        Expr::Neg(expr) => {
+            gen_expr(expr, out);
+            out.push_str("    neg rax\n");
+        }
     }
 }

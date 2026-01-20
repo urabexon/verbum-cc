@@ -13,6 +13,14 @@ script = '''
 ./debug.sh 25 "5*(9-4)"
 ./debug.sh 6  "24/4"
 ./debug.sh 4  "7-6/2"
+./debug.sh 2  "-3+5"
+./debug.sh 12 "-(2+3)*4"
+./debug.sh 6  "+6"
+./debug.sh 5  "--5"
+./debug.sh 8  "-(-8)"
+./debug.sh 7  "+(+7)"
+./debug.sh 14 "-(1-15)"
+./debug.sh 1  "-(2-3)"
 '''
 dependencies = [ "build" ]
 

@@ -7,6 +7,7 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
+    Neg(Box<Expr>),
 }
 
 pub fn parse(lexer: &mut Lexer) -> Expr {
@@ -62,15 +63,25 @@ fn parse_term(lexer: &mut Lexer) -> Expr {
 }
 
 fn parse_factor(lexer: &mut Lexer) -> Expr {
-    match lexer.consume_token() {
-        Token::Num(n) => Expr::Num(n),
-        Token::LParen => {
-            let node = parse_expr(lexer);
-            match lexer.consume_token() {
-                Token::RParen => node,
-                t => panic!("expected ')', got {:?}", t),
-            }
+    match lexer.peek_token() {
+        Token::Plus => {
+            lexer.consume_token();
+            parse_factor(lexer)
         }
-        t => panic!("expected number or '(', got {:?}", t),
+        Token::Minus => {
+            lexer.consume_token();
+            Expr::Neg(Box::new(parse_factor(lexer)))
+        }
+        _ => match lexer.consume_token() {
+            Token::Num(n) => Expr::Num(n),
+            Token::LParen => {
+                let node = parse_expr(lexer);
+                match lexer.consume_token() {
+                    Token::RParen => node,
+                    t => panic!("expected ')', got {:?}", t),
+                }
+            }
+            t => panic!("expected number or '(', got {:?}", t),
+        },
     }
 }
