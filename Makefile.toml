@@ -33,6 +33,12 @@ script = '''
 ./debug.sh 3 "if(0) 2; else 3;"
 ./debug.sh 3 "1;2;3;"
 ./debug.sh 42 "while(0) 1; 42;"
+./debug.sh 5  "a = 5; a;"
+./debug.sh 8  "a = 3; b = 5; a + b;"
+./debug.sh 20 "a = b = 10; a + b;"
+./debug.sh 15 "a = 10; a = a + 5; a;"
+./debug.sh 10 "a = 0; while(a < 10) a = a + 1; a;"
+./debug.sh 55 "s = 0; i = 1; while(i <= 10) { s = s + i; i = i + 1; } s;"
 '''
 dependencies = [ "build" ]
 

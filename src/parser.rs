@@ -3,6 +3,8 @@ use crate::tokenizer::{Lexer, Token};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Num(i64),
+    Ident(String),
+    Assign(String, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
@@ -40,12 +42,28 @@ fn parse_stmt(lexer: &mut Lexer) -> Stmt {
         _ => {}
     }
 
-    let expr = parse_equality(lexer);
+    let expr = parse_assign(lexer);
 
     match lexer.peek_token() {
         Token::Semi => { lexer.consume_token(); Stmt::ExprStmt(expr) }
         Token::Eof  => Stmt::ExprStmt(expr),
         t => panic!("expected ';' or EOF, got {:?}", t),
+    }
+}
+
+fn parse_assign(lexer: &mut Lexer) -> Expr {
+    let lhs = parse_equality(lexer);
+
+    if let Token::Eq = lexer.peek_token() {
+        lexer.consume_token();
+        let rhs = parse_assign(lexer);
+
+        match lhs {
+            Expr::Ident(name) => Expr::Assign(name, Box::new(rhs)),
+            _ => panic!("invalid assignment target (left-hand side must be a variable)"),
+        }
+    } else {
+        lhs
     }
 }
 
@@ -74,7 +92,7 @@ fn parse_if(lexer: &mut Lexer) -> Stmt {
         Token::LParen => {}
         t => panic!("expected '(', got {:?}", t),
     }
-    let cond = parse_equality(lexer);
+    let cond = parse_assign(lexer);
     match lexer.consume_token() {
         Token::RParen => {}
         t => panic!("expected ')', got {:?}", t),
@@ -105,7 +123,7 @@ fn parse_while(lexer: &mut Lexer) -> Stmt {
         Token::LParen => {}
         t => panic!("expected '(', got {:?}", t),
     }
-    let cond = parse_equality(lexer);
+    let cond = parse_assign(lexer);
     match lexer.consume_token() {
         Token::RParen => {}
         t => panic!("expected ')', got {:?}", t),
@@ -229,14 +247,15 @@ fn parse_factor(lexer: &mut Lexer) -> Expr {
         }
         _ => match lexer.consume_token() {
             Token::Num(n) => Expr::Num(n),
+            Token::Ident(name) => Expr::Ident(name),
             Token::LParen => {
-                let node = parse_equality(lexer);
+                let node = parse_assign(lexer);
                 match lexer.consume_token() {
                     Token::RParen => node,
                     t => panic!("expected ')', got {:?}", t),
                 }
             }
-            t => panic!("expected number or '(', got {:?}", t),
+            t => panic!("expected number, identifier, or '(', got {:?}", t),
         },
     }
 }

@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     Num(i64),
+    Ident(String),
     Plus,
     Minus,
     Star,
@@ -8,6 +9,7 @@ pub enum Token {
     LParen,
     RParen,
     Eof,
+    Eq,   // =
     EqEq, // ==
     Ne,   // !=
     Lt,   // <
@@ -71,7 +73,7 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                     return Token::EqEq;
                 }
-                panic!("unexpected token '=' (did you mean '==')?");
+                return Token::Eq;
             }
             b'!' => {
                 self.pos += 1;
@@ -165,7 +167,7 @@ impl<'a> Lexer<'a> {
                 "if" => Token::If,
                 "else" => Token::Else,
                 "while" => Token::While,
-                _ => panic!("unexpected identifier: {}", s),
+                _ => Token::Ident(s.to_string()),
             };
         }
 
