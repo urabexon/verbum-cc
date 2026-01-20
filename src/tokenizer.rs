@@ -19,6 +19,8 @@ pub enum Token {
     If,
     Else,
     While,
+    For,
+    Do,
     LBrace,   // {
     RBrace,   // }
     Semi,     // ;
@@ -167,6 +169,8 @@ impl<'a> Lexer<'a> {
                 "if" => Token::If,
                 "else" => Token::Else,
                 "while" => Token::While,
+                "for" => Token::For,
+                "do" => Token::Do,
                 _ => Token::Ident(s.to_string()),
             };
         }

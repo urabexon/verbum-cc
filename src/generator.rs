@@ -98,6 +98,16 @@ fn collect_vars_stmt(stmt: &Stmt, vars: &mut HashSet<String>) {
             collect_vars_expr(cond, vars);
             collect_vars_stmt(body, vars);
         }
+        Stmt::For { init, cond, update, body } => {
+            collect_vars_expr(init, vars);
+            collect_vars_expr(cond, vars);
+            collect_vars_expr(update, vars);
+            collect_vars_stmt(body, vars);
+        }
+        Stmt::DoWhile { body, cond } => {
+            collect_vars_stmt(body, vars);
+            collect_vars_expr(cond, vars);
+        }
     }
 }
 
@@ -188,6 +198,34 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
             out.push_str(&format!("    jmp {}\n", l_begin));
 
             out.push_str(&format!("{}:\n", l_end));
+        }
+
+        Stmt::For { init, cond, update, body } => {
+            let l_begin = cg.label_gen.next("for_begin");
+            let l_end = cg.label_gen.next("for_end");
+
+            gen_expr(init, cg, out);
+
+            out.push_str(&format!("{}:\n", l_begin));
+            gen_expr(cond, cg, out);
+            out.push_str("    cmp rax, 0\n");
+            out.push_str(&format!("    je {}\n", l_end));
+
+            gen_stmt(body, cg, out);
+            gen_expr(update, cg, out);
+            out.push_str(&format!("    jmp {}\n", l_begin));
+
+            out.push_str(&format!("{}:\n", l_end));
+        }
+
+        Stmt::DoWhile { body, cond } => {
+            let l_begin = cg.label_gen.next("do_begin");
+
+            out.push_str(&format!("{}:\n", l_begin));
+            gen_stmt(body, cg, out);
+            gen_expr(cond, cg, out);
+            out.push_str("    cmp rax, 0\n");
+            out.push_str(&format!("    jne {}\n", l_begin));
         }
     }
 }

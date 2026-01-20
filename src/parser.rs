@@ -24,6 +24,8 @@ pub enum Stmt {
     Block(Vec<Stmt>),
     If { cond: Expr, then: Box<Stmt>, els: Box<Stmt> },
     While { cond: Expr, body: Box<Stmt> },
+    For { init: Expr, cond: Expr, update: Expr, body: Box<Stmt> },
+    DoWhile { body: Box<Stmt>, cond: Expr },
 }
 
 pub fn parse_program(lexer: &mut Lexer) -> Vec<Stmt> {
@@ -38,6 +40,8 @@ fn parse_stmt(lexer: &mut Lexer) -> Stmt {
     match lexer.peek_token() {
         Token::If => return parse_if(lexer),
         Token::While => return parse_while(lexer),
+        Token::For => return parse_for(lexer),
+        Token::Do => return parse_do_while(lexer),
         Token::LBrace => return parse_block(lexer),
         _ => {}
     }
@@ -134,6 +138,76 @@ fn parse_while(lexer: &mut Lexer) -> Stmt {
     Stmt::While {
         cond,
         body: Box::new(body),
+    }
+}
+
+fn parse_for(lexer: &mut Lexer) -> Stmt {
+    match lexer.consume_token() {
+        Token::For => {}
+        t => panic!("expected 'for', got {:?}", t),
+    }
+    match lexer.consume_token() {
+        Token::LParen => {}
+        t => panic!("expected '(', got {:?}", t),
+    }
+
+    let init = parse_assign(lexer);
+    match lexer.consume_token() {
+        Token::Semi => {}
+        t => panic!("expected ';' after for-init, got {:?}", t),
+    }
+
+    let cond = parse_assign(lexer);
+    match lexer.consume_token() {
+        Token::Semi => {}
+        t => panic!("expected ';' after for-cond, got {:?}", t),
+    }
+
+    let update = parse_assign(lexer);
+    match lexer.consume_token() {
+        Token::RParen => {}
+        t => panic!("expected ')' after for-update, got {:?}", t),
+    }
+
+    let body = parse_stmt(lexer);
+
+    Stmt::For {
+        init,
+        cond,
+        update,
+        body: Box::new(body),
+    }
+}
+
+fn parse_do_while(lexer: &mut Lexer) -> Stmt {
+    match lexer.consume_token() {
+        Token::Do => {}
+        t => panic!("expected 'do', got {:?}", t),
+    }
+
+    let body = parse_stmt(lexer);
+
+    match lexer.consume_token() {
+        Token::While => {}
+        t => panic!("expected 'while' after do-body, got {:?}", t),
+    }
+    match lexer.consume_token() {
+        Token::LParen => {}
+        t => panic!("expected '(', got {:?}", t),
+    }
+    let cond = parse_assign(lexer);
+    match lexer.consume_token() {
+        Token::RParen => {}
+        t => panic!("expected ')', got {:?}", t),
+    }
+    match lexer.consume_token() {
+        Token::Semi => {}
+        t => panic!("expected ';' after do-while, got {:?}", t),
+    }
+
+    Stmt::DoWhile {
+        body: Box::new(body),
+        cond,
     }
 }
 
