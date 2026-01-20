@@ -1,18 +1,17 @@
 use std::io::{self, Read};
 
+mod generator;
+mod parser;
+mod tokenizer;
+
 fn main() {
-    let mut _input = String::new();
-    let _ = io::stdin().read_to_string(&mut _input);
+    let mut input = String::new();
+    // let _ = io::stdin().read_to_string(&mut _input);
+    io::stdin().read_to_string(&mut input).unwrap();
 
-    let asm = r#"
-.intel_syntax noprefix
-.global _start
-
-_start:
-    mov rax, 60
-    mov rdi, 42
-    syscall
-"#;
+    let tokens = tokenizer::tokenize(&input);
+    let expr = parser::parse(&tokens);
+    let asm = generator::gen(&expr);
 
     print!("{asm}");
 }
