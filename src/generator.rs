@@ -12,6 +12,16 @@ pub fn gen(expr: &Expr) -> String {
     out
 }
 
+fn gen_cmp(lhs: &Expr, rhs: &Expr, cc: &str, out: &mut String) {
+    gen_expr(lhs, out);
+    out.push_str("    push rax\n");
+    gen_expr(rhs, out);
+    out.push_str("    pop rdi\n");
+    out.push_str("    cmp rdi, rax\n");
+    out.push_str(&format!("    set{} al\n", cc));
+    out.push_str("    movzx rax, al\n");
+}
+
 fn gen_expr(expr: &Expr, out: &mut String) {
     match expr {
         Expr::Num(n) => {
@@ -52,5 +62,11 @@ fn gen_expr(expr: &Expr, out: &mut String) {
             gen_expr(expr, out);
             out.push_str("    neg rax\n");
         }
+        Expr::EqEq(lhs, rhs) => gen_cmp(lhs, rhs, "e", out),
+        Expr::Ne(lhs, rhs) => gen_cmp(lhs, rhs, "ne", out),
+        Expr::Lt(lhs, rhs) => gen_cmp(lhs, rhs, "l", out),
+        Expr::Le(lhs, rhs) => gen_cmp(lhs, rhs, "le", out),
+        Expr::Gt(lhs, rhs) => gen_cmp(lhs, rhs, "g", out),
+        Expr::Ge(lhs, rhs) => gen_cmp(lhs, rhs, "ge", out),
     }
 }

@@ -8,6 +8,12 @@ pub enum Token {
     LParen,
     RParen,
     Eof,
+    EqEq, // ==
+    Ne,   // !=
+    Lt,   // <
+    Le,   // <=
+    Gt,   // >
+    Ge,   // >=
 }
 
 pub struct Lexer<'a> {
@@ -52,6 +58,42 @@ impl<'a> Lexer<'a> {
 
         let c = self.input[self.pos];
 
+        match c {
+            b'=' => {
+                self.pos += 1;
+                if self.pos < self.input.len() && self.input[self.pos] == b'=' {
+                    self.pos += 1;
+                    return Token::EqEq;
+                }
+                panic!("unexpected token '=' (did you mean '==')?");
+            }
+            b'!' => {
+                self.pos += 1;
+                if self.pos < self.input.len() && self.input[self.pos] == b'=' {
+                    self.pos += 1;
+                    return Token::Ne;
+                }
+                panic!("unexpected token '!' (did you mean '!=')?");
+            }
+            b'<' => {
+                self.pos += 1;
+                if self.pos < self.input.len() && self.input[self.pos] == b'=' {
+                    self.pos += 1;
+                    return Token::Le;
+                }
+                return Token::Lt;
+            }
+            b'>' => {
+                self.pos += 1;
+                if self.pos < self.input.len() && self.input[self.pos] == b'=' {
+                    self.pos += 1;
+                    return Token::Ge;
+                }
+                return Token::Gt;
+            }
+            _ => {}
+        }
+        
         match c {
             b'+' => {
                 self.pos += 1;
