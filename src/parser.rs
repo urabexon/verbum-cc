@@ -10,6 +10,9 @@ pub enum Expr {
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
     Neg(Box<Expr>),
+    Not(Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
+    Or(Box<Expr>, Box<Expr>),
     EqEq(Box<Expr>, Box<Expr>),
     Ne(Box<Expr>, Box<Expr>),
     Lt(Box<Expr>, Box<Expr>),
@@ -56,7 +59,7 @@ fn parse_stmt(lexer: &mut Lexer) -> Stmt {
 }
 
 fn parse_assign(lexer: &mut Lexer) -> Expr {
-    let lhs = parse_equality(lexer);
+    let lhs = parse_or(lexer);
 
     if let Token::Eq = lexer.peek_token() {
         lexer.consume_token();
@@ -69,6 +72,40 @@ fn parse_assign(lexer: &mut Lexer) -> Expr {
     } else {
         lhs
     }
+}
+
+fn parse_or(lexer: &mut Lexer) -> Expr {
+    let mut node = parse_and(lexer);
+
+    loop {
+        match lexer.peek_token() {
+            Token::OrOr => {
+                lexer.consume_token();
+                let rhs = parse_and(lexer);
+                node = Expr::Or(Box::new(node), Box::new(rhs));
+            }
+            _ => break,
+        }
+    }
+
+    node
+}
+
+fn parse_and(lexer: &mut Lexer) -> Expr {
+    let mut node = parse_equality(lexer);
+
+    loop {
+        match lexer.peek_token() {
+            Token::AndAnd => {
+                lexer.consume_token();
+                let rhs = parse_equality(lexer);
+                node = Expr::And(Box::new(node), Box::new(rhs));
+            }
+            _ => break,
+        }
+    }
+
+    node
 }
 
 fn parse_block(lexer: &mut Lexer) -> Stmt {
@@ -318,6 +355,10 @@ fn parse_factor(lexer: &mut Lexer) -> Expr {
         Token::Minus => {
             lexer.consume_token();
             Expr::Neg(Box::new(parse_factor(lexer)))
+        }
+        Token::Not => {
+            lexer.consume_token();
+            Expr::Not(Box::new(parse_factor(lexer)))
         }
         _ => match lexer.consume_token() {
             Token::Num(n) => Expr::Num(n),

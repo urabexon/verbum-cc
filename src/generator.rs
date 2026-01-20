@@ -125,6 +125,8 @@ fn collect_vars_expr(expr: &Expr, vars: &mut HashSet<String>) {
         | Expr::Sub(lhs, rhs)
         | Expr::Mul(lhs, rhs)
         | Expr::Div(lhs, rhs)
+        | Expr::And(lhs, rhs)
+        | Expr::Or(lhs, rhs)
         | Expr::EqEq(lhs, rhs)
         | Expr::Ne(lhs, rhs)
         | Expr::Lt(lhs, rhs)
@@ -134,7 +136,7 @@ fn collect_vars_expr(expr: &Expr, vars: &mut HashSet<String>) {
             collect_vars_expr(lhs, vars);
             collect_vars_expr(rhs, vars);
         }
-        Expr::Neg(inner) => {
+        Expr::Neg(inner) | Expr::Not(inner) => {
             collect_vars_expr(inner, vars);
         }
     }
@@ -292,6 +294,55 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
         Expr::Neg(inner) => {
             gen_expr(inner, cg, out);
             out.push_str("    neg rax\n");
+        }
+
+        Expr::Not(inner) => {
+            gen_expr(inner, cg, out);
+            out.push_str("    cmp rax, 0\n");
+            out.push_str("    sete al\n");
+            out.push_str("    movzx rax, al\n");
+        }
+
+        Expr::And(lhs, rhs) => {
+            let l_false = cg.label_gen.next("and_false");
+            let l_end = cg.label_gen.next("and_end");
+
+            gen_expr(lhs, cg, out);
+            out.push_str("    cmp rax, 0\n");
+            out.push_str(&format!("    je {}\n", l_false));
+
+            gen_expr(rhs, cg, out);
+            out.push_str("    cmp rax, 0\n");
+            out.push_str(&format!("    je {}\n", l_false));
+
+            out.push_str("    mov rax, 1\n");
+            out.push_str(&format!("    jmp {}\n", l_end));
+
+            out.push_str(&format!("{}:\n", l_false));
+            out.push_str("    mov rax, 0\n");
+
+            out.push_str(&format!("{}:\n", l_end));
+        }
+
+        Expr::Or(lhs, rhs) => {
+            let l_true = cg.label_gen.next("or_true");
+            let l_end = cg.label_gen.next("or_end");
+
+            gen_expr(lhs, cg, out);
+            out.push_str("    cmp rax, 0\n");
+            out.push_str(&format!("    jne {}\n", l_true));
+
+            gen_expr(rhs, cg, out);
+            out.push_str("    cmp rax, 0\n");
+            out.push_str(&format!("    jne {}\n", l_true));
+
+            out.push_str("    mov rax, 0\n");
+            out.push_str(&format!("    jmp {}\n", l_end));
+
+            out.push_str(&format!("{}:\n", l_true));
+            out.push_str("    mov rax, 1\n");
+
+            out.push_str(&format!("{}:\n", l_end));
         }
 
         Expr::EqEq(lhs, rhs) => gen_cmp(lhs, rhs, "e", cg, out),

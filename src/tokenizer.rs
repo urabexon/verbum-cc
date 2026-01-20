@@ -9,13 +9,16 @@ pub enum Token {
     LParen,
     RParen,
     Eof,
-    Eq,   // =
-    EqEq, // ==
-    Ne,   // !=
-    Lt,   // <
-    Le,   // <=
-    Gt,   // >
-    Ge,   // >=
+    Eq,     // =
+    EqEq,   // ==
+    Ne,     // !=
+    Lt,     // <
+    Le,     // <=
+    Gt,     // >
+    Ge,     // >=
+    Not,    // !
+    AndAnd, // &&
+    OrOr,   // || 
     If,
     Else,
     While,
@@ -83,7 +86,23 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                     return Token::Ne;
                 }
-                panic!("unexpected token '!' (did you mean '!=')?");
+                return Token::Not;
+            }
+            b'&' => {
+                self.pos += 1;
+                if self.pos < self.input.len() && self.input[self.pos] == b'&' {
+                    self.pos += 1;
+                    return Token::AndAnd;
+                }
+                panic!("unexpected token '&' (did you mean '&&')?");
+            }
+            b'|' => {
+                self.pos += 1;
+                if self.pos < self.input.len() && self.input[self.pos] == b'|' {
+                    self.pos += 1;
+                    return Token::OrOr;
+                }
+                panic!("unexpected token '|' (did you mean '||')?");
             }
             b'<' => {
                 self.pos += 1;
