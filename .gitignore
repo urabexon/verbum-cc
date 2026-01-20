@@ -13,6 +13,10 @@
 .vscode
 *.swp
 
+# Binary
+a.out
+*.o
+
 # AI
 .cursor
 CLAUDE.md
