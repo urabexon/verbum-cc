@@ -14,6 +14,11 @@ pub enum Token {
     Le,   // <=
     Gt,   // >
     Ge,   // >=
+    If,
+    Else,
+    LBrace,   // {
+    RBrace,   // }
+    Semi,     // ;
 }
 
 pub struct Lexer<'a> {
@@ -119,6 +124,18 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 return Token::RParen;
             }
+            b'{' => { 
+                self.pos += 1; 
+                return Token::LBrace;
+            }
+            b'}' => { 
+                self.pos += 1;
+                return Token::RBrace;
+            }
+            b';' => {
+                self.pos += 1;
+                return Token::Semi;
+            }
             _ => {}
         }
 
@@ -130,6 +147,26 @@ impl<'a> Lexer<'a> {
             }
             return Token::Num(val);
         }
+
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let start = self.pos;
+            self.pos += 1;
+            while self.pos < self.input.len() {
+                let ch = self.input[self.pos];
+                if ch.is_ascii_alphanumeric() || ch == b'_' {
+                    self.pos += 1;
+                } else {
+                    break;
+                }
+            }
+            let s = std::str::from_utf8(&self.input[start..self.pos]).unwrap();
+            return match s {
+                "if" => Token::If,
+                "else" => Token::Else,
+                _ => panic!("unexpected identifier: {}", s),
+            };
+        }
+
 
         panic!("unexpected character: {}", c as char);
     }

@@ -16,13 +16,84 @@ pub enum Expr {
     Ge(Box<Expr>, Box<Expr>),
 }
 
-pub fn parse(lexer: &mut Lexer) -> Expr {
-    let node = parse_equality(lexer);
-    match lexer.consume_token() {
-        Token::Eof => node,
-        t => panic!("unexpected token at end: {:?}", t),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stmt {
+    ExprStmt(Expr),
+    Block(Vec<Stmt>),
+    If { cond: Expr, then: Box<Stmt>, els: Box<Stmt> },
+}
+
+pub fn parse_program(lexer: &mut Lexer) -> Vec<Stmt> {
+    let mut stmts = Vec::new();
+    while lexer.peek_token() != Token::Eof {
+        stmts.push(parse_stmt(lexer));
+    }
+    stmts
+}
+
+fn parse_stmt(lexer: &mut Lexer) -> Stmt {
+    match lexer.peek_token() {
+        Token::If => return parse_if(lexer),
+        Token::LBrace => return parse_block(lexer),
+        _ => {}
+    }
+
+    let expr = parse_equality(lexer);
+
+    match lexer.peek_token() {
+        Token::Semi => { lexer.consume_token(); Stmt::ExprStmt(expr) }
+        Token::Eof  => Stmt::ExprStmt(expr),
+        t => panic!("expected ';' or EOF, got {:?}", t),
     }
 }
+
+fn parse_block(lexer: &mut Lexer) -> Stmt {
+    match lexer.consume_token() {
+        Token::LBrace => {}
+        t => panic!("expected '{{', got {:?}", t),
+    }
+    let mut stmts = Vec::new();
+    while lexer.peek_token() != Token::RBrace {
+        stmts.push(parse_stmt(lexer));
+    }
+    match lexer.consume_token() {
+        Token::RBrace => {}
+        t => panic!("expected '}}', got {:?}", t),
+    }
+    Stmt::Block(stmts)
+}
+
+fn parse_if(lexer: &mut Lexer) -> Stmt {
+    match lexer.consume_token() {
+        Token::If => {}
+        t => panic!("expected 'if', got {:?}", t),
+    }
+    match lexer.consume_token() {
+        Token::LParen => {}
+        t => panic!("expected '(', got {:?}", t),
+    }
+    let cond = parse_equality(lexer);
+    match lexer.consume_token() {
+        Token::RParen => {}
+        t => panic!("expected ')', got {:?}", t),
+    }
+
+    let then_stmt = parse_stmt(lexer);
+
+    match lexer.consume_token() {
+        Token::Else => {}
+        t => panic!("expected 'else', got {:?}", t),
+    }
+
+    let else_stmt = parse_stmt(lexer);
+
+    Stmt::If {
+        cond,
+        then: Box::new(then_stmt),
+        els: Box::new(else_stmt),
+    }
+}
+
 fn parse_equality(lexer: &mut Lexer) -> Expr {
     let mut node = parse_relational(lexer);
 

@@ -9,8 +9,8 @@ fn main() {
     io::stdin().read_to_string(&mut input).unwrap();
 
     let mut lexer = tokenizer::Lexer::new(&input);
-    let expr = parser::parse(&mut lexer);
-    let asm = generator::gen(&expr);
+    let prog = parser::parse_program(&mut lexer);
+    let asm = generator::gen_program(&prog);
 
     print!("{asm}");
 }
