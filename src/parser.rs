@@ -9,6 +9,7 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
+    Mod(Box<Expr>, Box<Expr>),
     Neg(Box<Expr>),
     Not(Box<Expr>),
     And(Box<Expr>, Box<Expr>),
@@ -338,6 +339,11 @@ fn parse_term(lexer: &mut Lexer) -> Expr {
                 lexer.consume_token();
                 let rhs = parse_factor(lexer);
                 node = Expr::Div(Box::new(node), Box::new(rhs));
+            }
+            Token::Percent => {
+                lexer.consume_token();
+                let rhs = parse_factor(lexer);
+                node = Expr::Mod(Box::new(node), Box::new(rhs));
             }
             _ => break,
         }

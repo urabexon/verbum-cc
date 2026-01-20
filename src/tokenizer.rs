@@ -6,6 +6,7 @@ pub enum Token {
     Minus,
     Star,
     Slash,
+    Percent, // %
     LParen,
     RParen,
     Eof,
@@ -139,6 +140,10 @@ impl<'a> Lexer<'a> {
             b'/' => {
                 self.pos += 1;
                 return Token::Slash;
+            }
+            b'%' => {
+                self.pos += 1;
+                return Token::Percent;
             }
             b'(' => {
                 self.pos += 1;

@@ -125,6 +125,7 @@ fn collect_vars_expr(expr: &Expr, vars: &mut HashSet<String>) {
         | Expr::Sub(lhs, rhs)
         | Expr::Mul(lhs, rhs)
         | Expr::Div(lhs, rhs)
+        | Expr::Mod(lhs, rhs)
         | Expr::And(lhs, rhs)
         | Expr::Or(lhs, rhs)
         | Expr::EqEq(lhs, rhs)
@@ -289,6 +290,17 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    pop rax\n");
             out.push_str("    cqo\n");
             out.push_str("    idiv rdi\n");
+        }
+
+        Expr::Mod(lhs, rhs) => {
+            gen_expr(lhs, cg, out);
+            out.push_str("    push rax\n");
+            gen_expr(rhs, cg, out);
+            out.push_str("    mov rdi, rax\n");
+            out.push_str("    pop rax\n");
+            out.push_str("    cqo\n");
+            out.push_str("    idiv rdi\n");
+            out.push_str("    mov rax, rdx\n");
         }
 
         Expr::Neg(inner) => {
