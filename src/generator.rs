@@ -1,19 +1,36 @@
 use crate::parser::Expr;
 
 pub fn gen(expr: &Expr) -> String {
-    let n = match expr {
-        Expr::Num(v) => *v,
-    };
+    let mut out = String::new();
+    out.push_str(".intel_syntax noprefix\n.global _start\n\n_start:\n");
 
-    format!(
-        r#".intel_syntax noprefix
-.global _start
+    gen_expr(expr, &mut out);
 
-_start:
-    mov rax, 60
-    mov rdi, {}
-    syscall
-"#,
-        n
-    )
+    out.push_str("    mov rdi, rax\n");
+    out.push_str("    mov rax, 60\n");
+    out.push_str("    syscall\n");
+    out
+}
+
+fn gen_expr(expr: &Expr, out: &mut String) {
+    match expr {
+        Expr::Num(n) => {
+            out.push_str(&format!("    mov rax, {}\n", n));
+        }
+        Expr::Add(lhs, rhs) => {
+            gen_expr(lhs, out);
+            out.push_str("    push rax\n");
+            gen_expr(rhs, out);
+            out.push_str("    pop rdi\n");
+            out.push_str("    add rax, rdi\n");
+        }
+        Expr::Sub(lhs, rhs) => {
+            gen_expr(lhs, out);
+            out.push_str("    push rax\n");
+            gen_expr(rhs, out);
+            out.push_str("    pop rdi\n");
+            out.push_str("    sub rdi, rax\n");
+            out.push_str("    mov rax, rdi\n");
+        }
+    }
 }
