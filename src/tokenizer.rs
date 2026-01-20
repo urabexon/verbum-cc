@@ -6,28 +6,31 @@ pub enum Token {
     Minus,
     Star,
     Slash,
-    Percent, // %
+    Percent,  // %
     LParen,
     RParen,
     Eof,
-    Eq,     // =
-    EqEq,   // ==
-    Ne,     // !=
-    Lt,     // <
-    Le,     // <=
-    Gt,     // >
-    Ge,     // >=
-    Not,    // !
-    AndAnd, // &&
-    OrOr,   // || 
+    Eq,       // =
+    EqEq,     // ==
+    Ne,       // !=
+    Lt,       // <
+    Le,       // <=
+    Gt,       // >
+    Ge,       // >=
+    Not,      // !
+    AndAnd,   // &&
+    OrOr,     // ||
     If,
     Else,
     While,
     For,
     Do,
+    Fn,       // fn
+    Return,   // return
     LBrace,   // {
     RBrace,   // }
     Semi,     // ;
+    Comma,    // ,
 }
 
 pub struct Lexer<'a> {
@@ -165,6 +168,10 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 return Token::Semi;
             }
+            b',' => {
+                self.pos += 1;
+                return Token::Comma;
+            }
             _ => {}
         }
 
@@ -195,6 +202,8 @@ impl<'a> Lexer<'a> {
                 "while" => Token::While,
                 "for" => Token::For,
                 "do" => Token::Do,
+                "fn" => Token::Fn,
+                "return" => Token::Return,
                 _ => Token::Ident(s.to_string()),
             };
         }

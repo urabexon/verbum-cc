@@ -1,20 +1,28 @@
 use std::collections::{HashMap, HashSet};
-use crate::parser::{Expr, Stmt};
+use crate::parser::{Expr, Stmt, Program, FnDef};
 
 struct CodeGen {
     vars: HashMap<String, i64>,
     stack_size: i64,
     label_gen: LabelGen,
+    return_label: Option<String>,
 }
 
 impl CodeGen {
-    fn new(var_names: HashSet<String>) -> Self {
+    fn new(var_names: HashSet<String>, params: &[String]) -> Self {
         let mut vars = HashMap::new();
         let mut offset = 0i64;
 
-        for name in var_names {
+        for param in params {
             offset -= 8;
-            vars.insert(name, offset);
+            vars.insert(param.clone(), offset);
+        }
+
+        for name in var_names {
+            if !vars.contains_key(&name) {
+                offset -= 8;
+                vars.insert(name, offset);
+            }
         }
 
         let stack_size = if offset == 0 {
@@ -27,6 +35,7 @@ impl CodeGen {
             vars,
             stack_size,
             label_gen: LabelGen::new(),
+            return_label: None,
         }
     }
 
@@ -38,13 +47,18 @@ impl CodeGen {
     }
 }
 
-pub fn gen_program(stmts: &[Stmt]) -> String {
-    let var_names = collect_vars_stmts(stmts);
-
-    let mut cg = CodeGen::new(var_names);
-
+pub fn gen_program(prog: &Program) -> String {
     let mut out = String::new();
-    out.push_str(".intel_syntax noprefix\n.global _start\n\n_start:\n");
+    out.push_str(".intel_syntax noprefix\n");
+
+    for func in &prog.functions {
+        gen_function(func, &mut out);
+    }
+
+    out.push_str(".global _start\n\n_start:\n");
+
+    let var_names = collect_vars_stmts(&prog.main_body);
+    let mut cg = CodeGen::new(var_names, &[]);
 
     out.push_str("    push rbp\n");
     out.push_str("    mov rbp, rsp\n");
@@ -52,10 +66,10 @@ pub fn gen_program(stmts: &[Stmt]) -> String {
         out.push_str(&format!("    sub rsp, {}\n", cg.stack_size));
     }
 
-    if stmts.is_empty() {
+    if prog.main_body.is_empty() {
         out.push_str("    mov rax, 0\n");
     } else {
-        for stmt in stmts {
+        for stmt in &prog.main_body {
             gen_stmt(stmt, &mut cg, &mut out);
         }
     }
@@ -67,6 +81,42 @@ pub fn gen_program(stmts: &[Stmt]) -> String {
     out.push_str("    mov rax, 60\n");
     out.push_str("    syscall\n");
     out
+}
+
+fn gen_function(func: &FnDef, out: &mut String) {
+    let var_names = collect_vars_stmts(&func.body);
+    let mut cg = CodeGen::new(var_names, &func.params);
+
+    let return_label = cg.label_gen.next(&format!("{}_ret", func.name));
+    cg.return_label = Some(return_label.clone());
+
+    out.push_str(&format!("\n{}:\n", func.name));
+
+    out.push_str("    push rbp\n");
+    out.push_str("    mov rbp, rsp\n");
+    if cg.stack_size > 0 {
+        out.push_str(&format!("    sub rsp, {}\n", cg.stack_size));
+    }
+
+    let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+    for (i, param) in func.params.iter().enumerate() {
+        if i >= 6 {
+            panic!("too many parameters (max 6 supported)");
+        }
+        let addr = cg.var_addr(param);
+        out.push_str(&format!("    mov {}, {}\n", addr, arg_regs[i]));
+    }
+
+    for stmt in &func.body {
+        gen_stmt(stmt, &mut cg, out);
+    }
+
+    out.push_str("    mov rax, 0\n");
+
+    out.push_str(&format!("{}:\n", return_label));
+    out.push_str("    mov rsp, rbp\n");
+    out.push_str("    pop rbp\n");
+    out.push_str("    ret\n");
 }
 
 //=============================================================================
@@ -108,6 +158,9 @@ fn collect_vars_stmt(stmt: &Stmt, vars: &mut HashSet<String>) {
             collect_vars_stmt(body, vars);
             collect_vars_expr(cond, vars);
         }
+        Stmt::Return(expr) => {
+            collect_vars_expr(expr, vars);
+        }
     }
 }
 
@@ -120,6 +173,11 @@ fn collect_vars_expr(expr: &Expr, vars: &mut HashSet<String>) {
         Expr::Assign(name, rhs) => {
             vars.insert(name.clone());
             collect_vars_expr(rhs, vars);
+        }
+        Expr::Call(_, args) => {
+            for arg in args {
+                collect_vars_expr(arg, vars);
+            }
         }
         Expr::Add(lhs, rhs)
         | Expr::Sub(lhs, rhs)
@@ -230,6 +288,13 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    cmp rax, 0\n");
             out.push_str(&format!("    jne {}\n", l_begin));
         }
+
+        Stmt::Return(expr) => {
+            gen_expr(expr, cg, out);
+            if let Some(ref label) = cg.return_label {
+                out.push_str(&format!("    jmp {}\n", label));
+            }
+        }
     }
 }
 
@@ -258,6 +323,24 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             gen_expr(rhs, cg, out);
             let addr = cg.var_addr(name);
             out.push_str(&format!("    mov {}, rax\n", addr));
+        }
+
+        Expr::Call(name, args) => {
+            if args.len() > 6 {
+                panic!("too many arguments (max 6 supported)");
+            }
+
+            for arg in args.iter() {
+                gen_expr(arg, cg, out);
+                out.push_str("    push rax\n");
+            }
+
+            let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+            for i in (0..args.len()).rev() {
+                out.push_str(&format!("    pop {}\n", arg_regs[i]));
+            }
+
+            out.push_str(&format!("    call {}\n", name));
         }
 
         Expr::Add(lhs, rhs) => {

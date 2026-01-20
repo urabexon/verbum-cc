@@ -5,6 +5,7 @@ pub enum Expr {
     Num(i64),
     Ident(String),
     Assign(String, Box<Expr>),
+    Call(String, Vec<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
@@ -30,14 +31,89 @@ pub enum Stmt {
     While { cond: Expr, body: Box<Stmt> },
     For { init: Expr, cond: Expr, update: Expr, body: Box<Stmt> },
     DoWhile { body: Box<Stmt>, cond: Expr },
+    Return(Expr),
 }
 
-pub fn parse_program(lexer: &mut Lexer) -> Vec<Stmt> {
-    let mut stmts = Vec::new();
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnDef {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Program {
+    pub functions: Vec<FnDef>,
+    pub main_body: Vec<Stmt>,
+}
+
+pub fn parse_program(lexer: &mut Lexer) -> Program {
+    let mut functions = Vec::new();
+    let mut main_body = Vec::new();
+
     while lexer.peek_token() != Token::Eof {
-        stmts.push(parse_stmt(lexer));
+        if lexer.peek_token() == Token::Fn {
+            functions.push(parse_fn_def(lexer));
+        } else {
+            main_body.push(parse_stmt(lexer));
+        }
     }
-    stmts
+
+    Program { functions, main_body }
+}
+
+fn parse_fn_def(lexer: &mut Lexer) -> FnDef {
+    match lexer.consume_token() {
+        Token::Fn => {}
+        t => panic!("expected 'fn', got {:?}", t),
+    }
+
+    let name = match lexer.consume_token() {
+        Token::Ident(name) => name,
+        t => panic!("expected function name, got {:?}", t),
+    };
+
+    match lexer.consume_token() {
+        Token::LParen => {}
+        t => panic!("expected '(' after function name, got {:?}", t),
+    }
+
+    let mut params = Vec::new();
+    if lexer.peek_token() != Token::RParen {
+        loop {
+            match lexer.consume_token() {
+                Token::Ident(param) => params.push(param),
+                t => panic!("expected parameter name, got {:?}", t),
+            }
+            match lexer.peek_token() {
+                Token::Comma => { lexer.consume_token(); }
+                Token::RParen => break,
+                t => panic!("expected ',' or ')' in parameter list, got {:?}", t),
+            }
+        }
+    }
+
+    match lexer.consume_token() {
+        Token::RParen => {}
+        t => panic!("expected ')' after parameters, got {:?}", t),
+    }
+
+    match lexer.consume_token() {
+        Token::LBrace => {}
+        t => panic!("expected '{{' for function body, got {:?}", t),
+    }
+
+    let mut body = Vec::new();
+    while lexer.peek_token() != Token::RBrace {
+        body.push(parse_stmt(lexer));
+    }
+
+    match lexer.consume_token() {
+        Token::RBrace => {}
+        t => panic!("expected '}}' after function body, got {:?}", t),
+    }
+
+    FnDef { name, params, body }
 }
 
 fn parse_stmt(lexer: &mut Lexer) -> Stmt {
@@ -47,6 +123,7 @@ fn parse_stmt(lexer: &mut Lexer) -> Stmt {
         Token::For => return parse_for(lexer),
         Token::Do => return parse_do_while(lexer),
         Token::LBrace => return parse_block(lexer),
+        Token::Return => return parse_return(lexer),
         _ => {}
     }
 
@@ -57,6 +134,22 @@ fn parse_stmt(lexer: &mut Lexer) -> Stmt {
         Token::Eof  => Stmt::ExprStmt(expr),
         t => panic!("expected ';' or EOF, got {:?}", t),
     }
+}
+
+fn parse_return(lexer: &mut Lexer) -> Stmt {
+    match lexer.consume_token() {
+        Token::Return => {}
+        t => panic!("expected 'return', got {:?}", t),
+    }
+
+    let expr = parse_assign(lexer);
+
+    match lexer.consume_token() {
+        Token::Semi => {}
+        t => panic!("expected ';' after return, got {:?}", t),
+    }
+
+    Stmt::Return(expr)
 }
 
 fn parse_assign(lexer: &mut Lexer) -> Expr {
@@ -368,7 +461,29 @@ fn parse_factor(lexer: &mut Lexer) -> Expr {
         }
         _ => match lexer.consume_token() {
             Token::Num(n) => Expr::Num(n),
-            Token::Ident(name) => Expr::Ident(name),
+            Token::Ident(name) => {
+                if lexer.peek_token() == Token::LParen {
+                    lexer.consume_token();
+                    let mut args = Vec::new();
+                    if lexer.peek_token() != Token::RParen {
+                        loop {
+                            args.push(parse_assign(lexer));
+                            match lexer.peek_token() {
+                                Token::Comma => { lexer.consume_token(); }
+                                Token::RParen => break,
+                                t => panic!("expected ',' or ')' in argument list, got {:?}", t),
+                            }
+                        }
+                    }
+                    match lexer.consume_token() {
+                        Token::RParen => {}
+                        t => panic!("expected ')' after arguments, got {:?}", t),
+                    }
+                    Expr::Call(name, args)
+                } else {
+                    Expr::Ident(name)
+                }
+            }
             Token::LParen => {
                 let node = parse_assign(lexer);
                 match lexer.consume_token() {
