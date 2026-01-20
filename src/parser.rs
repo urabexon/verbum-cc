@@ -21,6 +21,7 @@ pub enum Stmt {
     ExprStmt(Expr),
     Block(Vec<Stmt>),
     If { cond: Expr, then: Box<Stmt>, els: Box<Stmt> },
+    While { cond: Expr, body: Box<Stmt> },
 }
 
 pub fn parse_program(lexer: &mut Lexer) -> Vec<Stmt> {
@@ -34,6 +35,7 @@ pub fn parse_program(lexer: &mut Lexer) -> Vec<Stmt> {
 fn parse_stmt(lexer: &mut Lexer) -> Stmt {
     match lexer.peek_token() {
         Token::If => return parse_if(lexer),
+        Token::While => return parse_while(lexer),
         Token::LBrace => return parse_block(lexer),
         _ => {}
     }
@@ -91,6 +93,29 @@ fn parse_if(lexer: &mut Lexer) -> Stmt {
         cond,
         then: Box::new(then_stmt),
         els: Box::new(else_stmt),
+    }
+}
+
+fn parse_while(lexer: &mut Lexer) -> Stmt {
+    match lexer.consume_token() {
+        Token::While => {}
+        t => panic!("expected 'while', got {:?}", t),
+    }
+    match lexer.consume_token() {
+        Token::LParen => {}
+        t => panic!("expected '(', got {:?}", t),
+    }
+    let cond = parse_equality(lexer);
+    match lexer.consume_token() {
+        Token::RParen => {}
+        t => panic!("expected ')', got {:?}", t),
+    }
+
+    let body = parse_stmt(lexer);
+
+    Stmt::While {
+        cond,
+        body: Box::new(body),
     }
 }
 

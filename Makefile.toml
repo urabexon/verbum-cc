@@ -32,6 +32,7 @@ script = '''
 ./debug.sh 2 "if(1) 2; else 3;"
 ./debug.sh 3 "if(0) 2; else 3;"
 ./debug.sh 3 "1;2;3;"
+./debug.sh 42 "while(0) 1; 42;"
 '''
 dependencies = [ "build" ]
 

@@ -16,6 +16,7 @@ pub enum Token {
     Ge,   // >=
     If,
     Else,
+    While,
     LBrace,   // {
     RBrace,   // }
     Semi,     // ;
@@ -163,6 +164,7 @@ impl<'a> Lexer<'a> {
             return match s {
                 "if" => Token::If,
                 "else" => Token::Else,
+                "while" => Token::While,
                 _ => panic!("unexpected identifier: {}", s),
             };
         }

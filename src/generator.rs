@@ -61,6 +61,20 @@ fn gen_stmt(stmt: &Stmt, lg: &mut LabelGen, out: &mut String) {
 
             out.push_str(&format!("{}:\n", l_end));
         }
+        Stmt::While { cond, body } => {
+            let l_begin = lg.next("while_begin");
+            let l_end = lg.next("while_end");
+
+            out.push_str(&format!("{}:\n", l_begin));
+            gen_expr(cond, lg, out);
+            out.push_str("    cmp rax, 0\n");
+            out.push_str(&format!("    je {}\n", l_end));
+
+            gen_stmt(body, lg, out);
+            out.push_str(&format!("    jmp {}\n", l_begin));
+
+            out.push_str(&format!("{}:\n", l_end));
+        }
     }
 }
 
