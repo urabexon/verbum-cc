@@ -1,0 +1,18 @@
+# Rust build artifacts
+/target
+
+# Temporary assembly output
+/tmp
+
+# asm build artifacts (for comparison / experiments)
+/asm/target
+
+# OS / editor
+.DS_Store
+.idea
+.vscode
+*.swp
+
+# AI
+.cursor
+CLAUDE.md
