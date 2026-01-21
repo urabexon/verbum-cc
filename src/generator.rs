@@ -195,8 +195,12 @@ fn collect_vars_expr(expr: &Expr, vars: &mut HashSet<String>) {
             collect_vars_expr(lhs, vars);
             collect_vars_expr(rhs, vars);
         }
-        Expr::Neg(inner) | Expr::Not(inner) => {
+        Expr::Neg(inner) | Expr::Not(inner) | Expr::Addr(inner) | Expr::Deref(inner) => {
             collect_vars_expr(inner, vars);
+        }
+        Expr::DerefAssign(addr, value) => {
+            collect_vars_expr(addr, vars);
+            collect_vars_expr(value, vars);
         }
     }
 }
@@ -308,6 +312,19 @@ fn gen_cmp(lhs: &Expr, rhs: &Expr, cc: &str, cg: &mut CodeGen, out: &mut String)
     out.push_str("    movzx rax, al\n");
 }
 
+fn gen_addr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
+    match expr {
+        Expr::Ident(name) => {
+            let offset = cg.vars.get(name).expect(&format!("undefined variable: {}", name));
+            out.push_str(&format!("    lea rax, [rbp{}]\n", offset));
+        }
+        Expr::Deref(inner) => {
+            gen_expr(inner, cg, out);
+        }
+        _ => panic!("cannot take address of non-lvalue expression"),
+    }
+}
+
 fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
     match expr {
         Expr::Num(n) => {
@@ -341,6 +358,24 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             }
 
             out.push_str(&format!("    call {}\n", name));
+        }
+
+        Expr::Addr(inner) => {
+            gen_addr(inner, cg, out);
+        }
+
+        Expr::Deref(inner) => {
+            gen_expr(inner, cg, out);
+            out.push_str("    mov rax, [rax]\n");
+        }
+
+        Expr::DerefAssign(addr, value) => {
+            gen_expr(value, cg, out);
+            out.push_str("    push rax\n");
+            gen_expr(addr, cg, out);
+            out.push_str("    pop rdi\n");
+            out.push_str("    mov [rax], rdi\n");
+            out.push_str("    mov rax, rdi\n");
         }
 
         Expr::Add(lhs, rhs) => {

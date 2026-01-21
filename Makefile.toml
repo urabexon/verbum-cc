@@ -78,6 +78,15 @@ script = '''
 ./debug.sh 15 "fn add3(a, b, c) { return a + b + c; } add3(1, 5, 9);"
 ./debug.sh 100 "fn square(x) { return x * x; } fn add(a, b) { return a + b; } add(square(6), square(8));"
 ./debug.sh 21 "fn sum(n) { s = 0; for(i = 1; i <= n; i = i + 1) s = s + i; return s; } sum(6);"
+./debug.sh 10 "x = 10; p = &x; *p;"
+./debug.sh 20 "x = 10; p = &x; *p = 20; x;"
+./debug.sh 30 "x = 10; p = &x; *p = *p + 20; x;"
+./debug.sh 5 "a = 3; b = 5; p = &a; q = &b; *p + *q - a;"
+./debug.sh 100 "x = 10; p = &x; *p = *p * *p; x;"
+./debug.sh 42 "fn set(p, v) { *p = v; } x = 0; set(&x, 42); x;"
+./debug.sh 15 "fn add_to(p, v) { *p = *p + v; } x = 10; add_to(&x, 5); x;"
+./debug.sh 77 "fn swap(p, q) { t = *p; *p = *q; *q = t; } a = 55; b = 77; swap(&a, &b); a;"
+./debug.sh 55 "fn swap(p, q) { t = *p; *p = *q; *q = t; } a = 55; b = 77; swap(&a, &b); b;"
 '''
 dependencies = [ "build" ]
 

@@ -5,7 +5,10 @@ pub enum Expr {
     Num(i64),
     Ident(String),
     Assign(String, Box<Expr>),
+    DerefAssign(Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
+    Addr(Box<Expr>),
+    Deref(Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
@@ -161,7 +164,8 @@ fn parse_assign(lexer: &mut Lexer) -> Expr {
 
         match lhs {
             Expr::Ident(name) => Expr::Assign(name, Box::new(rhs)),
-            _ => panic!("invalid assignment target (left-hand side must be a variable)"),
+            Expr::Deref(inner) => Expr::DerefAssign(inner, Box::new(rhs)),
+            _ => panic!("invalid assignment target (left-hand side must be a variable or dereference)"),
         }
     } else {
         lhs
@@ -458,6 +462,14 @@ fn parse_factor(lexer: &mut Lexer) -> Expr {
         Token::Not => {
             lexer.consume_token();
             Expr::Not(Box::new(parse_factor(lexer)))
+        }
+        Token::Amp => {
+            lexer.consume_token();
+            Expr::Addr(Box::new(parse_factor(lexer)))
+        }
+        Token::Star => {
+            lexer.consume_token();
+            Expr::Deref(Box::new(parse_factor(lexer)))
         }
         _ => match lexer.consume_token() {
             Token::Num(n) => Expr::Num(n),

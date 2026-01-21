@@ -18,6 +18,7 @@ pub enum Token {
     Gt,       // >
     Ge,       // >=
     Not,      // !
+    Amp,      // & (address-of)
     AndAnd,   // &&
     OrOr,     // ||
     If,
@@ -98,7 +99,7 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                     return Token::AndAnd;
                 }
-                panic!("unexpected token '&' (did you mean '&&')?");
+                return Token::Amp;
             }
             b'|' => {
                 self.pos += 1;
