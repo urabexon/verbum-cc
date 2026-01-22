@@ -24,6 +24,16 @@ pub enum Expr {
     Le(Box<Expr>, Box<Expr>),
     Gt(Box<Expr>, Box<Expr>),
     Ge(Box<Expr>, Box<Expr>),
+    BitAnd(Box<Expr>, Box<Expr>),
+    BitOr(Box<Expr>, Box<Expr>),
+    BitXor(Box<Expr>, Box<Expr>),
+    BitNot(Box<Expr>),
+    Shl(Box<Expr>, Box<Expr>),
+    Shr(Box<Expr>, Box<Expr>),
+    PreInc(String),   // ++i
+    PreDec(String),   // --i
+    PostInc(String),  // i++
+    PostDec(String),  // i--
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +45,8 @@ pub enum Stmt {
     For { init: Expr, cond: Expr, update: Expr, body: Box<Stmt> },
     DoWhile { body: Box<Stmt>, cond: Expr },
     Return(Expr),
+    Break,
+    Continue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +139,22 @@ fn parse_stmt(lexer: &mut Lexer) -> Stmt {
         Token::Do => return parse_do_while(lexer),
         Token::LBrace => return parse_block(lexer),
         Token::Return => return parse_return(lexer),
+        Token::Break => {
+            lexer.consume_token();
+            match lexer.consume_token() {
+                Token::Semi => {}
+                t => panic!("expected ';' after break, got {:?}", t),
+            }
+            return Stmt::Break;
+        }
+        Token::Continue => {
+            lexer.consume_token();
+            match lexer.consume_token() {
+                Token::Semi => {}
+                t => panic!("expected ';' after continue, got {:?}", t),
+            }
+            return Stmt::Continue;
+        }
         _ => {}
     }
 
@@ -158,17 +186,37 @@ fn parse_return(lexer: &mut Lexer) -> Stmt {
 fn parse_assign(lexer: &mut Lexer) -> Expr {
     let lhs = parse_or(lexer);
 
-    if let Token::Eq = lexer.peek_token() {
-        lexer.consume_token();
-        let rhs = parse_assign(lexer);
-
-        match lhs {
-            Expr::Ident(name) => Expr::Assign(name, Box::new(rhs)),
-            Expr::Deref(inner) => Expr::DerefAssign(inner, Box::new(rhs)),
-            _ => panic!("invalid assignment target (left-hand side must be a variable or dereference)"),
+    match lexer.peek_token() {
+        Token::Eq => {
+            lexer.consume_token();
+            let rhs = parse_assign(lexer);
+            match lhs {
+                Expr::Ident(name) => Expr::Assign(name, Box::new(rhs)),
+                Expr::Deref(inner) => Expr::DerefAssign(inner, Box::new(rhs)),
+                _ => panic!("invalid assignment target"),
+            }
         }
-    } else {
-        lhs
+        Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq | Token::PercentEq => {
+            let op = lexer.consume_token();
+            let rhs = parse_assign(lexer);
+            match lhs {
+                Expr::Ident(ref name) => {
+                    let lhs_expr = Box::new(Expr::Ident(name.clone()));
+                    let rhs_expr = Box::new(rhs);
+                    let compound = match op {
+                        Token::PlusEq => Expr::Add(lhs_expr, rhs_expr),
+                        Token::MinusEq => Expr::Sub(lhs_expr, rhs_expr),
+                        Token::StarEq => Expr::Mul(lhs_expr, rhs_expr),
+                        Token::SlashEq => Expr::Div(lhs_expr, rhs_expr),
+                        Token::PercentEq => Expr::Mod(lhs_expr, rhs_expr),
+                        _ => unreachable!(),
+                    };
+                    Expr::Assign(name.clone(), Box::new(compound))
+                }
+                _ => panic!("compound assignment requires variable on left-hand side"),
+            }
+        }
+        _ => lhs,
     }
 }
 
@@ -190,14 +238,65 @@ fn parse_or(lexer: &mut Lexer) -> Expr {
 }
 
 fn parse_and(lexer: &mut Lexer) -> Expr {
-    let mut node = parse_equality(lexer);
+    let mut node = parse_bitor(lexer);
 
     loop {
         match lexer.peek_token() {
             Token::AndAnd => {
                 lexer.consume_token();
-                let rhs = parse_equality(lexer);
+                let rhs = parse_bitor(lexer);
                 node = Expr::And(Box::new(node), Box::new(rhs));
+            }
+            _ => break,
+        }
+    }
+
+    node
+}
+
+fn parse_bitor(lexer: &mut Lexer) -> Expr {
+    let mut node = parse_bitxor(lexer);
+
+    loop {
+        match lexer.peek_token() {
+            Token::Pipe => {
+                lexer.consume_token();
+                let rhs = parse_bitxor(lexer);
+                node = Expr::BitOr(Box::new(node), Box::new(rhs));
+            }
+            _ => break,
+        }
+    }
+
+    node
+}
+
+fn parse_bitxor(lexer: &mut Lexer) -> Expr {
+    let mut node = parse_bitand(lexer);
+
+    loop {
+        match lexer.peek_token() {
+            Token::Caret => {
+                lexer.consume_token();
+                let rhs = parse_bitand(lexer);
+                node = Expr::BitXor(Box::new(node), Box::new(rhs));
+            }
+            _ => break,
+        }
+    }
+
+    node
+}
+
+fn parse_bitand(lexer: &mut Lexer) -> Expr {
+    let mut node = parse_equality(lexer);
+
+    loop {
+        match lexer.peek_token() {
+            Token::Amp => {
+                lexer.consume_token();
+                let rhs = parse_equality(lexer);
+                node = Expr::BitAnd(Box::new(node), Box::new(rhs));
             }
             _ => break,
         }
@@ -239,12 +338,12 @@ fn parse_if(lexer: &mut Lexer) -> Stmt {
 
     let then_stmt = parse_stmt(lexer);
 
-    match lexer.consume_token() {
-        Token::Else => {}
-        t => panic!("expected 'else', got {:?}", t),
-    }
-
-    let else_stmt = parse_stmt(lexer);
+    let else_stmt = if lexer.peek_token() == Token::Else {
+        lexer.consume_token();
+        parse_stmt(lexer)
+    } else {
+        Stmt::Block(vec![])
+    };
 
     Stmt::If {
         cond,
@@ -369,29 +468,51 @@ fn parse_equality(lexer: &mut Lexer) -> Expr {
 }
 
 fn parse_relational(lexer: &mut Lexer) -> Expr {
-    let mut node = parse_add(lexer);
+    let mut node = parse_shift(lexer);
 
     loop {
         match lexer.peek_token() {
             Token::Lt => {
                 lexer.consume_token();
-                let rhs = parse_add(lexer);
+                let rhs = parse_shift(lexer);
                 node = Expr::Lt(Box::new(node), Box::new(rhs));
             }
             Token::Le => {
                 lexer.consume_token();
-                let rhs = parse_add(lexer);
+                let rhs = parse_shift(lexer);
                 node = Expr::Le(Box::new(node), Box::new(rhs));
             }
             Token::Gt => {
                 lexer.consume_token();
-                let rhs = parse_add(lexer);
+                let rhs = parse_shift(lexer);
                 node = Expr::Gt(Box::new(node), Box::new(rhs));
             }
             Token::Ge => {
                 lexer.consume_token();
-                let rhs = parse_add(lexer);
+                let rhs = parse_shift(lexer);
                 node = Expr::Ge(Box::new(node), Box::new(rhs));
+            }
+            _ => break,
+        }
+    }
+
+    node
+}
+
+fn parse_shift(lexer: &mut Lexer) -> Expr {
+    let mut node = parse_add(lexer);
+
+    loop {
+        match lexer.peek_token() {
+            Token::Shl => {
+                lexer.consume_token();
+                let rhs = parse_add(lexer);
+                node = Expr::Shl(Box::new(node), Box::new(rhs));
+            }
+            Token::Shr => {
+                lexer.consume_token();
+                let rhs = parse_add(lexer);
+                node = Expr::Shr(Box::new(node), Box::new(rhs));
             }
             _ => break,
         }
@@ -463,6 +584,10 @@ fn parse_factor(lexer: &mut Lexer) -> Expr {
             lexer.consume_token();
             Expr::Not(Box::new(parse_factor(lexer)))
         }
+        Token::Tilde => {
+            lexer.consume_token();
+            Expr::BitNot(Box::new(parse_factor(lexer)))
+        }
         Token::Amp => {
             lexer.consume_token();
             Expr::Addr(Box::new(parse_factor(lexer)))
@@ -471,29 +596,58 @@ fn parse_factor(lexer: &mut Lexer) -> Expr {
             lexer.consume_token();
             Expr::Deref(Box::new(parse_factor(lexer)))
         }
+        Token::PlusPlus => {
+            lexer.consume_token();
+            match lexer.peek_token() {
+                Token::Ident(name) => {
+                    lexer.consume_token();
+                    Expr::PreInc(name)
+                }
+                t => panic!("expected identifier after '++', got {:?}", t),
+            }
+        }
+        Token::MinusMinus => {
+            lexer.consume_token();
+            match lexer.peek_token() {
+                Token::Ident(name) => {
+                    lexer.consume_token();
+                    Expr::PreDec(name)
+                }
+                _ => Expr::Neg(Box::new(Expr::Neg(Box::new(parse_factor(lexer)))))
+            }
+        }
         _ => match lexer.consume_token() {
             Token::Num(n) => Expr::Num(n),
             Token::Ident(name) => {
-                if lexer.peek_token() == Token::LParen {
-                    lexer.consume_token();
-                    let mut args = Vec::new();
-                    if lexer.peek_token() != Token::RParen {
-                        loop {
-                            args.push(parse_assign(lexer));
-                            match lexer.peek_token() {
-                                Token::Comma => { lexer.consume_token(); }
-                                Token::RParen => break,
-                                t => panic!("expected ',' or ')' in argument list, got {:?}", t),
+                match lexer.peek_token() {
+                    Token::PlusPlus => {
+                        lexer.consume_token();
+                        Expr::PostInc(name)
+                    }
+                    Token::MinusMinus => {
+                        lexer.consume_token();
+                        Expr::PostDec(name)
+                    }
+                    Token::LParen => {
+                        lexer.consume_token();
+                        let mut args = Vec::new();
+                        if lexer.peek_token() != Token::RParen {
+                            loop {
+                                args.push(parse_assign(lexer));
+                                match lexer.peek_token() {
+                                    Token::Comma => { lexer.consume_token(); }
+                                    Token::RParen => break,
+                                    t => panic!("expected ',' or ')' in argument list, got {:?}", t),
+                                }
                             }
                         }
+                        match lexer.consume_token() {
+                            Token::RParen => {}
+                            t => panic!("expected ')' after arguments, got {:?}", t),
+                        }
+                        Expr::Call(name, args)
                     }
-                    match lexer.consume_token() {
-                        Token::RParen => {}
-                        t => panic!("expected ')' after arguments, got {:?}", t),
-                    }
-                    Expr::Call(name, args)
-                } else {
-                    Expr::Ident(name)
+                    _ => Expr::Ident(name),
                 }
             }
             Token::LParen => {

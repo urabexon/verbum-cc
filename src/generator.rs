@@ -6,6 +6,8 @@ struct CodeGen {
     stack_size: i64,
     label_gen: LabelGen,
     return_label: Option<String>,
+    break_labels: Vec<String>,
+    continue_labels: Vec<String>,
 }
 
 impl CodeGen {
@@ -36,6 +38,8 @@ impl CodeGen {
             stack_size,
             label_gen: LabelGen::new(),
             return_label: None,
+            break_labels: Vec::new(),
+            continue_labels: Vec::new(),
         }
     }
 
@@ -161,6 +165,7 @@ fn collect_vars_stmt(stmt: &Stmt, vars: &mut HashSet<String>) {
         Stmt::Return(expr) => {
             collect_vars_expr(expr, vars);
         }
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -191,16 +196,24 @@ fn collect_vars_expr(expr: &Expr, vars: &mut HashSet<String>) {
         | Expr::Lt(lhs, rhs)
         | Expr::Le(lhs, rhs)
         | Expr::Gt(lhs, rhs)
-        | Expr::Ge(lhs, rhs) => {
+        | Expr::Ge(lhs, rhs)
+        | Expr::BitAnd(lhs, rhs)
+        | Expr::BitOr(lhs, rhs)
+        | Expr::BitXor(lhs, rhs)
+        | Expr::Shl(lhs, rhs)
+        | Expr::Shr(lhs, rhs) => {
             collect_vars_expr(lhs, vars);
             collect_vars_expr(rhs, vars);
         }
-        Expr::Neg(inner) | Expr::Not(inner) | Expr::Addr(inner) | Expr::Deref(inner) => {
+        Expr::Neg(inner) | Expr::Not(inner) | Expr::BitNot(inner) | Expr::Addr(inner) | Expr::Deref(inner) => {
             collect_vars_expr(inner, vars);
         }
         Expr::DerefAssign(addr, value) => {
             collect_vars_expr(addr, vars);
             collect_vars_expr(value, vars);
+        }
+        Expr::PreInc(name) | Expr::PreDec(name) | Expr::PostInc(name) | Expr::PostDec(name) => {
+            vars.insert(name.clone());
         }
     }
 }
@@ -254,6 +267,9 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
             let l_begin = cg.label_gen.next("while_begin");
             let l_end = cg.label_gen.next("while_end");
 
+            cg.break_labels.push(l_end.clone());
+            cg.continue_labels.push(l_begin.clone());
+
             out.push_str(&format!("{}:\n", l_begin));
             gen_expr(cond, cg, out);
             out.push_str("    cmp rax, 0\n");
@@ -263,13 +279,20 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
             out.push_str(&format!("    jmp {}\n", l_begin));
 
             out.push_str(&format!("{}:\n", l_end));
+
+            cg.break_labels.pop();
+            cg.continue_labels.pop();
         }
 
         Stmt::For { init, cond, update, body } => {
             let l_begin = cg.label_gen.next("for_begin");
+            let l_continue = cg.label_gen.next("for_continue");
             let l_end = cg.label_gen.next("for_end");
 
             gen_expr(init, cg, out);
+
+            cg.break_labels.push(l_end.clone());
+            cg.continue_labels.push(l_continue.clone());
 
             out.push_str(&format!("{}:\n", l_begin));
             gen_expr(cond, cg, out);
@@ -277,26 +300,59 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
             out.push_str(&format!("    je {}\n", l_end));
 
             gen_stmt(body, cg, out);
+
+            out.push_str(&format!("{}:\n", l_continue));
             gen_expr(update, cg, out);
             out.push_str(&format!("    jmp {}\n", l_begin));
 
             out.push_str(&format!("{}:\n", l_end));
+
+            cg.break_labels.pop();
+            cg.continue_labels.pop();
         }
 
         Stmt::DoWhile { body, cond } => {
             let l_begin = cg.label_gen.next("do_begin");
+            let l_cond = cg.label_gen.next("do_cond");
+            let l_end = cg.label_gen.next("do_end");
+
+            cg.break_labels.push(l_end.clone());
+            cg.continue_labels.push(l_cond.clone());
 
             out.push_str(&format!("{}:\n", l_begin));
             gen_stmt(body, cg, out);
+
+            out.push_str(&format!("{}:\n", l_cond));
             gen_expr(cond, cg, out);
             out.push_str("    cmp rax, 0\n");
             out.push_str(&format!("    jne {}\n", l_begin));
+
+            out.push_str(&format!("{}:\n", l_end));
+
+            cg.break_labels.pop();
+            cg.continue_labels.pop();
         }
 
         Stmt::Return(expr) => {
             gen_expr(expr, cg, out);
             if let Some(ref label) = cg.return_label {
                 out.push_str(&format!("    jmp {}\n", label));
+            }
+        }
+
+        Stmt::Break => {
+            if let Some(label) = cg.break_labels.last() {
+                out.push_str(&format!("    jmp {}\n", label));
+            } else {
+                panic!("break outside of loop");
+            }
+        }
+
+        Stmt::Continue => {
+            if let Some(label) = cg.continue_labels.last() {
+                out.push_str(&format!("    jmp {}\n", label));
+            } else {
+                panic!("continue outside of loop");
             }
         }
     }
@@ -481,5 +537,74 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
         Expr::Le(lhs, rhs) => gen_cmp(lhs, rhs, "le", cg, out),
         Expr::Gt(lhs, rhs) => gen_cmp(lhs, rhs, "g", cg, out),
         Expr::Ge(lhs, rhs) => gen_cmp(lhs, rhs, "ge", cg, out),
+
+        Expr::BitAnd(lhs, rhs) => {
+            gen_expr(lhs, cg, out);
+            out.push_str("    push rax\n");
+            gen_expr(rhs, cg, out);
+            out.push_str("    pop rdi\n");
+            out.push_str("    and rax, rdi\n");
+        }
+        Expr::BitOr(lhs, rhs) => {
+            gen_expr(lhs, cg, out);
+            out.push_str("    push rax\n");
+            gen_expr(rhs, cg, out);
+            out.push_str("    pop rdi\n");
+            out.push_str("    or rax, rdi\n");
+        }
+        Expr::BitXor(lhs, rhs) => {
+            gen_expr(lhs, cg, out);
+            out.push_str("    push rax\n");
+            gen_expr(rhs, cg, out);
+            out.push_str("    pop rdi\n");
+            out.push_str("    xor rax, rdi\n");
+        }
+        Expr::BitNot(inner) => {
+            gen_expr(inner, cg, out);
+            out.push_str("    not rax\n");
+        }
+        Expr::Shl(lhs, rhs) => {
+            gen_expr(lhs, cg, out);
+            out.push_str("    push rax\n");
+            gen_expr(rhs, cg, out);
+            out.push_str("    mov rcx, rax\n");
+            out.push_str("    pop rax\n");
+            out.push_str("    shl rax, cl\n");
+        }
+        Expr::Shr(lhs, rhs) => {
+            gen_expr(lhs, cg, out);
+            out.push_str("    push rax\n");
+            gen_expr(rhs, cg, out);
+            out.push_str("    mov rcx, rax\n");
+            out.push_str("    pop rax\n");
+            out.push_str("    sar rax, cl\n");
+        }
+
+        Expr::PreInc(name) => {
+            let addr = cg.var_addr(&name);
+            out.push_str(&format!("    mov rax, {}\n", addr));
+            out.push_str("    add rax, 1\n");
+            out.push_str(&format!("    mov {}, rax\n", addr));
+        }
+        Expr::PreDec(name) => {
+            let addr = cg.var_addr(&name);
+            out.push_str(&format!("    mov rax, {}\n", addr));
+            out.push_str("    sub rax, 1\n");
+            out.push_str(&format!("    mov {}, rax\n", addr));
+        }
+        Expr::PostInc(name) => {
+            let addr = cg.var_addr(&name);
+            out.push_str(&format!("    mov rax, {}\n", addr));
+            out.push_str("    mov rdi, rax\n");
+            out.push_str("    add rdi, 1\n");
+            out.push_str(&format!("    mov {}, rdi\n", addr));
+        }
+        Expr::PostDec(name) => {
+            let addr = cg.var_addr(&name);
+            out.push_str(&format!("    mov rax, {}\n", addr));
+            out.push_str("    mov rdi, rax\n");
+            out.push_str("    sub rdi, 1\n");
+            out.push_str(&format!("    mov {}, rdi\n", addr));
+        }
     }
 }

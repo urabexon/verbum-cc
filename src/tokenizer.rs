@@ -4,6 +4,8 @@ pub enum Token {
     Ident(String),
     Plus,
     Minus,
+    PlusPlus,   // ++
+    MinusMinus, // --
     Star,
     Slash,
     Percent,  // %
@@ -12,13 +14,23 @@ pub enum Token {
     Eof,
     Eq,       // =
     EqEq,     // ==
+    PlusEq,   // +=
+    MinusEq,  // -=
+    StarEq,   // *=
+    SlashEq,  // /=
+    PercentEq,// %=
     Ne,       // !=
     Lt,       // <
     Le,       // <=
     Gt,       // >
     Ge,       // >=
     Not,      // !
-    Amp,      // & (address-of)
+    Amp,      // & 
+    Pipe,     // | (bit OR)
+    Caret,    // ^ (bit XOR)
+    Tilde,    // ~ (bit NOT)
+    Shl,      // <<
+    Shr,      // >>
     AndAnd,   // &&
     OrOr,     // ||
     If,
@@ -26,8 +38,10 @@ pub enum Token {
     While,
     For,
     Do,
-    Fn,       // fn
-    Return,   // return
+    Break,
+    Continue,
+    Fn,
+    Return,
     LBrace,   // {
     RBrace,   // }
     Semi,     // ;
@@ -65,10 +79,43 @@ impl<'a> Lexer<'a> {
         self.read_token()
     }
 
-    fn read_token(&mut self) -> Token {
-        while self.pos < self.input.len() && self.input[self.pos].is_ascii_whitespace() {
-            self.pos += 1;
+    fn skip_whitespace_and_comments(&mut self) {
+        loop {
+            while self.pos < self.input.len() && self.input[self.pos].is_ascii_whitespace() {
+                self.pos += 1;
+            }
+
+            if self.pos >= self.input.len() {
+                return;
+            }
+
+            if self.pos + 1 < self.input.len() {
+                if self.input[self.pos] == b'/' && self.input[self.pos + 1] == b'/' {
+                    self.pos += 2;
+                    while self.pos < self.input.len() && self.input[self.pos] != b'\n' {
+                        self.pos += 1;
+                    }
+                    continue;
+                }
+                if self.input[self.pos] == b'/' && self.input[self.pos + 1] == b'*' {
+                    self.pos += 2;
+                    while self.pos + 1 < self.input.len() {
+                        if self.input[self.pos] == b'*' && self.input[self.pos + 1] == b'/' {
+                            self.pos += 2;
+                            break;
+                        }
+                        self.pos += 1;
+                    }
+                    continue;
+                }
+            }
+
+            return;
         }
+    }
+
+    fn read_token(&mut self) -> Token {
+        self.skip_whitespace_and_comments();
 
         if self.pos >= self.input.len() {
             return Token::Eof;
@@ -107,21 +154,41 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                     return Token::OrOr;
                 }
-                panic!("unexpected token '|' (did you mean '||')?");
+                return Token::Pipe;
+            }
+            b'^' => {
+                self.pos += 1;
+                return Token::Caret;
+            }
+            b'~' => {
+                self.pos += 1;
+                return Token::Tilde;
             }
             b'<' => {
                 self.pos += 1;
-                if self.pos < self.input.len() && self.input[self.pos] == b'=' {
-                    self.pos += 1;
-                    return Token::Le;
+                if self.pos < self.input.len() {
+                    if self.input[self.pos] == b'=' {
+                        self.pos += 1;
+                        return Token::Le;
+                    }
+                    if self.input[self.pos] == b'<' {
+                        self.pos += 1;
+                        return Token::Shl;
+                    }
                 }
                 return Token::Lt;
             }
             b'>' => {
                 self.pos += 1;
-                if self.pos < self.input.len() && self.input[self.pos] == b'=' {
-                    self.pos += 1;
-                    return Token::Ge;
+                if self.pos < self.input.len() {
+                    if self.input[self.pos] == b'=' {
+                        self.pos += 1;
+                        return Token::Ge;
+                    }
+                    if self.input[self.pos] == b'>' {
+                        self.pos += 1;
+                        return Token::Shr;
+                    }
                 }
                 return Token::Gt;
             }
@@ -131,22 +198,54 @@ impl<'a> Lexer<'a> {
         match c {
             b'+' => {
                 self.pos += 1;
+                if self.pos < self.input.len() {
+                    if self.input[self.pos] == b'=' {
+                        self.pos += 1;
+                        return Token::PlusEq;
+                    }
+                    if self.input[self.pos] == b'+' {
+                        self.pos += 1;
+                        return Token::PlusPlus;
+                    }
+                }
                 return Token::Plus;
             }
             b'-' => {
                 self.pos += 1;
+                if self.pos < self.input.len() {
+                    if self.input[self.pos] == b'=' {
+                        self.pos += 1;
+                        return Token::MinusEq;
+                    }
+                    if self.input[self.pos] == b'-' {
+                        self.pos += 1;
+                        return Token::MinusMinus;
+                    }
+                }
                 return Token::Minus;
             }
             b'*' => {
                 self.pos += 1;
+                if self.pos < self.input.len() && self.input[self.pos] == b'=' {
+                    self.pos += 1;
+                    return Token::StarEq;
+                }
                 return Token::Star;
             }
             b'/' => {
                 self.pos += 1;
+                if self.pos < self.input.len() && self.input[self.pos] == b'=' {
+                    self.pos += 1;
+                    return Token::SlashEq;
+                }
                 return Token::Slash;
             }
             b'%' => {
                 self.pos += 1;
+                if self.pos < self.input.len() && self.input[self.pos] == b'=' {
+                    self.pos += 1;
+                    return Token::PercentEq;
+                }
                 return Token::Percent;
             }
             b'(' => {
@@ -176,6 +275,42 @@ impl<'a> Lexer<'a> {
             _ => {}
         }
 
+        if c == b'\'' {
+            self.pos += 1;
+            if self.pos >= self.input.len() {
+                panic!("unexpected end of input in character literal");
+            }
+
+            let ch = if self.input[self.pos] == b'\\' {
+                self.pos += 1;
+                if self.pos >= self.input.len() {
+                    panic!("unexpected end of input in escape sequence");
+                }
+                let escaped = match self.input[self.pos] {
+                    b'n' => b'\n',
+                    b't' => b'\t',
+                    b'r' => b'\r',
+                    b'\\' => b'\\',
+                    b'\'' => b'\'',
+                    b'0' => 0,
+                    c => panic!("unknown escape sequence: \\{}", c as char),
+                };
+                self.pos += 1;
+                escaped
+            } else {
+                let ch = self.input[self.pos];
+                self.pos += 1;
+                ch
+            };
+
+            if self.pos >= self.input.len() || self.input[self.pos] != b'\'' {
+                panic!("expected closing quote for character literal");
+            }
+            self.pos += 1;
+
+            return Token::Num(ch as i64);
+        }
+
         if c.is_ascii_digit() {
             let mut val: i64 = 0;
             while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
@@ -203,6 +338,8 @@ impl<'a> Lexer<'a> {
                 "while" => Token::While,
                 "for" => Token::For,
                 "do" => Token::Do,
+                "break" => Token::Break,
+                "continue" => Token::Continue,
                 "fn" => Token::Fn,
                 "return" => Token::Return,
                 _ => Token::Ident(s.to_string()),
