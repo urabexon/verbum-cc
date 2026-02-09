@@ -25,7 +25,7 @@ pub enum Token {
     Gt,       // >
     Ge,       // >=
     Not,      // !
-    Amp,      // & 
+    Amp,      // &
     Pipe,     // | (bit OR)
     Caret,    // ^ (bit XOR)
     Tilde,    // ~ (bit NOT)
@@ -44,8 +44,14 @@ pub enum Token {
     Return,
     LBrace,   // {
     RBrace,   // }
+    LBracket, // [
+    RBracket, // ]
     Semi,     // ;
     Comma,    // ,
+    // Type keywords
+    Int,
+    Char,
+    Void,
 }
 
 pub struct Lexer<'a> {
@@ -272,6 +278,14 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 return Token::Comma;
             }
+            b'[' => {
+                self.pos += 1;
+                return Token::LBracket;
+            }
+            b']' => {
+                self.pos += 1;
+                return Token::RBracket;
+            }
             _ => {}
         }
 
@@ -342,6 +356,9 @@ impl<'a> Lexer<'a> {
                 "continue" => Token::Continue,
                 "fn" => Token::Fn,
                 "return" => Token::Return,
+                "int" => Token::Int,
+                "char" => Token::Char,
+                "void" => Token::Void,
                 _ => Token::Ident(s.to_string()),
             };
         }

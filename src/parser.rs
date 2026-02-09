@@ -1,4 +1,5 @@
 use crate::tokenizer::{Lexer, Token};
+use crate::types::Type;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -37,8 +38,16 @@ pub enum Expr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VarDecl {
+    pub name: String,
+    pub ty: Type,
+    pub init: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     ExprStmt(Expr),
+    VarDecl(VarDecl),
     Block(Vec<Stmt>),
     If { cond: Expr, then: Box<Stmt>, els: Box<Stmt> },
     While { cond: Expr, body: Box<Stmt> },
@@ -52,7 +61,8 @@ pub enum Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnDef {
     pub name: String,
-    pub params: Vec<String>,
+    pub ret_ty: Option<Type>,
+    pub params: Vec<(String, Option<Type>)>,
     pub body: Vec<Stmt>,
 }
 
@@ -62,6 +72,28 @@ pub struct Program {
     pub main_body: Vec<Stmt>,
 }
 
+fn is_type_specifier(token: &Token) -> bool {
+    matches!(token, Token::Int | Token::Char | Token::Void)
+}
+
+fn parse_base_type(lexer: &mut Lexer) -> Type {
+    match lexer.consume_token() {
+        Token::Int => Type::Int,
+        Token::Char => Type::Char,
+        Token::Void => Type::Void,
+        t => panic!("expected type specifier, got {:?}", t),
+    }
+}
+
+fn parse_type(lexer: &mut Lexer) -> Type {
+    let mut ty = parse_base_type(lexer);
+    while lexer.peek_token() == Token::Star {
+        lexer.consume_token();
+        ty = Type::Ptr(Box::new(ty));
+    }
+    ty
+}
+
 pub fn parse_program(lexer: &mut Lexer) -> Program {
     let mut functions = Vec::new();
     let mut main_body = Vec::new();
@@ -69,6 +101,12 @@ pub fn parse_program(lexer: &mut Lexer) -> Program {
     while lexer.peek_token() != Token::Eof {
         if lexer.peek_token() == Token::Fn {
             functions.push(parse_fn_def(lexer));
+        } else if is_type_specifier(&lexer.peek_token()) {
+            if let Some(func) = try_parse_typed_fn_def(lexer) {
+                functions.push(func);
+            } else {
+                main_body.push(parse_stmt(lexer));
+            }
         } else {
             main_body.push(parse_stmt(lexer));
         }
@@ -97,7 +135,7 @@ fn parse_fn_def(lexer: &mut Lexer) -> FnDef {
     if lexer.peek_token() != Token::RParen {
         loop {
             match lexer.consume_token() {
-                Token::Ident(param) => params.push(param),
+                Token::Ident(param) => params.push((param, None)),
                 t => panic!("expected parameter name, got {:?}", t),
             }
             match lexer.peek_token() {
@@ -128,7 +166,62 @@ fn parse_fn_def(lexer: &mut Lexer) -> FnDef {
         t => panic!("expected '}}' after function body, got {:?}", t),
     }
 
-    FnDef { name, params, body }
+    FnDef { name, ret_ty: None, params, body }
+}
+
+fn try_parse_typed_fn_def(lexer: &mut Lexer) -> Option<FnDef> {
+    let ret_ty = parse_type(lexer);
+
+    let name = match lexer.consume_token() {
+        Token::Ident(name) => name,
+        t => panic!("expected identifier after type, got {:?}", t),
+    };
+
+    if lexer.peek_token() != Token::LParen {
+        return None;
+    }
+
+    lexer.consume_token();
+
+    let mut params = Vec::new();
+    if lexer.peek_token() != Token::RParen {
+        loop {
+            let param_ty = parse_type(lexer);
+            let param_name = match lexer.consume_token() {
+                Token::Ident(name) => name,
+                t => panic!("expected parameter name, got {:?}", t),
+            };
+            params.push((param_name, Some(param_ty)));
+
+            match lexer.peek_token() {
+                Token::Comma => { lexer.consume_token(); }
+                Token::RParen => break,
+                t => panic!("expected ',' or ')' in parameter list, got {:?}", t),
+            }
+        }
+    }
+
+    match lexer.consume_token() {
+        Token::RParen => {}
+        t => panic!("expected ')' after parameters, got {:?}", t),
+    }
+
+    match lexer.consume_token() {
+        Token::LBrace => {}
+        t => panic!("expected '{{' for function body, got {:?}", t),
+    }
+
+    let mut body = Vec::new();
+    while lexer.peek_token() != Token::RBrace {
+        body.push(parse_stmt(lexer));
+    }
+
+    match lexer.consume_token() {
+        Token::RBrace => {}
+        t => panic!("expected '}}' after function body, got {:?}", t),
+    }
+
+    Some(FnDef { name, ret_ty: Some(ret_ty), params, body })
 }
 
 fn parse_stmt(lexer: &mut Lexer) -> Stmt {
@@ -155,6 +248,9 @@ fn parse_stmt(lexer: &mut Lexer) -> Stmt {
             }
             return Stmt::Continue;
         }
+        Token::Int | Token::Char | Token::Void => {
+            return parse_var_decl(lexer);
+        }
         _ => {}
     }
 
@@ -165,6 +261,29 @@ fn parse_stmt(lexer: &mut Lexer) -> Stmt {
         Token::Eof  => Stmt::ExprStmt(expr),
         t => panic!("expected ';' or EOF, got {:?}", t),
     }
+}
+
+fn parse_var_decl(lexer: &mut Lexer) -> Stmt {
+    let ty = parse_type(lexer);
+
+    let name = match lexer.consume_token() {
+        Token::Ident(name) => name,
+        t => panic!("expected variable name, got {:?}", t),
+    };
+
+    let init = if lexer.peek_token() == Token::Eq {
+        lexer.consume_token();
+        Some(parse_assign(lexer))
+    } else {
+        None
+    };
+
+    match lexer.consume_token() {
+        Token::Semi => {}
+        t => panic!("expected ';' after variable declaration, got {:?}", t),
+    }
+
+    Stmt::VarDecl(VarDecl { name, ty, init })
 }
 
 fn parse_return(lexer: &mut Lexer) -> Stmt {

@@ -3,6 +3,7 @@ use std::io::{self, Read};
 mod generator;
 mod parser;
 mod tokenizer;
+mod types;
 
 fn main() {
     let mut input = String::new();

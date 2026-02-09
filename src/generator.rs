@@ -1,8 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use crate::parser::{Expr, Stmt, Program, FnDef};
+use crate::types::Type;
+
+#[allow(dead_code)]
+struct VarInfo {
+    offset: i64,
+    ty: Type,
+}
 
 struct CodeGen {
-    vars: HashMap<String, i64>,
+    vars: HashMap<String, VarInfo>,
     stack_size: i64,
     label_gen: LabelGen,
     return_label: Option<String>,
@@ -11,19 +18,21 @@ struct CodeGen {
 }
 
 impl CodeGen {
-    fn new(var_names: HashSet<String>, params: &[String]) -> Self {
+    fn new(var_infos: HashMap<String, Type>, params: &[(String, Option<Type>)]) -> Self {
         let mut vars = HashMap::new();
         let mut offset = 0i64;
 
-        for param in params {
+        for (param, ty) in params {
+            let param_ty = ty.clone().unwrap_or(Type::Int);
             offset -= 8;
-            vars.insert(param.clone(), offset);
+            vars.insert(param.clone(), VarInfo { offset, ty: param_ty });
         }
 
-        for name in var_names {
+        for (name, ty) in var_infos {
             if !vars.contains_key(&name) {
-                offset -= 8;
-                vars.insert(name, offset);
+                let size = ty.size().max(8);
+                offset -= size;
+                vars.insert(name, VarInfo { offset, ty });
             }
         }
 
@@ -45,8 +54,25 @@ impl CodeGen {
 
     fn var_addr(&self, name: &str) -> String {
         match self.vars.get(name) {
-            Some(offset) => format!("[rbp{}]", offset),
+            Some(info) => format!("[rbp{}]", info.offset),
             None => panic!("undefined variable: {}", name),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn var_type(&self, name: &str) -> Option<&Type> {
+        self.vars.get(name).map(|info| &info.ty)
+    }
+
+    fn add_var(&mut self, name: String, ty: Type) {
+        if !self.vars.contains_key(&name) {
+            let size = ty.size().max(8);
+            let current_min = self.vars.values()
+                .map(|v| v.offset)
+                .min()
+                .unwrap_or(0);
+            let new_offset = current_min - size;
+            self.vars.insert(name, VarInfo { offset: new_offset, ty });
         }
     }
 }
@@ -61,8 +87,8 @@ pub fn gen_program(prog: &Program) -> String {
 
     out.push_str(".global _start\n\n_start:\n");
 
-    let var_names = collect_vars_stmts(&prog.main_body);
-    let mut cg = CodeGen::new(var_names, &[]);
+    let var_infos = collect_vars_stmts(&prog.main_body);
+    let mut cg = CodeGen::new(var_infos, &[]);
 
     out.push_str("    push rbp\n");
     out.push_str("    mov rbp, rsp\n");
@@ -88,8 +114,8 @@ pub fn gen_program(prog: &Program) -> String {
 }
 
 fn gen_function(func: &FnDef, out: &mut String) {
-    let var_names = collect_vars_stmts(&func.body);
-    let mut cg = CodeGen::new(var_names, &func.params);
+    let var_infos = collect_vars_stmts(&func.body);
+    let mut cg = CodeGen::new(var_infos, &func.params);
 
     let return_label = cg.label_gen.next(&format!("{}_ret", func.name));
     cg.return_label = Some(return_label.clone());
@@ -103,7 +129,7 @@ fn gen_function(func: &FnDef, out: &mut String) {
     }
 
     let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
-    for (i, param) in func.params.iter().enumerate() {
+    for (i, (param, _)) in func.params.iter().enumerate() {
         if i >= 6 {
             panic!("too many parameters (max 6 supported)");
         }
@@ -127,17 +153,23 @@ fn gen_function(func: &FnDef, out: &mut String) {
 // collect variables
 //=============================================================================
 
-fn collect_vars_stmts(stmts: &[Stmt]) -> HashSet<String> {
-    let mut vars = HashSet::new();
+fn collect_vars_stmts(stmts: &[Stmt]) -> HashMap<String, Type> {
+    let mut vars = HashMap::new();
     for stmt in stmts {
         collect_vars_stmt(stmt, &mut vars);
     }
     vars
 }
 
-fn collect_vars_stmt(stmt: &Stmt, vars: &mut HashSet<String>) {
+fn collect_vars_stmt(stmt: &Stmt, vars: &mut HashMap<String, Type>) {
     match stmt {
         Stmt::ExprStmt(e) => collect_vars_expr(e, vars),
+        Stmt::VarDecl(decl) => {
+            vars.insert(decl.name.clone(), decl.ty.clone());
+            if let Some(ref init) = decl.init {
+                collect_vars_expr(init, vars);
+            }
+        }
         Stmt::Block(stmts) => {
             for s in stmts {
                 collect_vars_stmt(s, vars);
@@ -169,14 +201,18 @@ fn collect_vars_stmt(stmt: &Stmt, vars: &mut HashSet<String>) {
     }
 }
 
-fn collect_vars_expr(expr: &Expr, vars: &mut HashSet<String>) {
+fn collect_vars_expr(expr: &Expr, vars: &mut HashMap<String, Type>) {
     match expr {
         Expr::Num(_) => {}
         Expr::Ident(name) => {
-            vars.insert(name.clone());
+            if !vars.contains_key(name) {
+                vars.insert(name.clone(), Type::Int);
+            }
         }
         Expr::Assign(name, rhs) => {
-            vars.insert(name.clone());
+            if !vars.contains_key(name) {
+                vars.insert(name.clone(), Type::Int);
+            }
             collect_vars_expr(rhs, vars);
         }
         Expr::Call(_, args) => {
@@ -213,7 +249,9 @@ fn collect_vars_expr(expr: &Expr, vars: &mut HashSet<String>) {
             collect_vars_expr(value, vars);
         }
         Expr::PreInc(name) | Expr::PreDec(name) | Expr::PostInc(name) | Expr::PostDec(name) => {
-            vars.insert(name.clone());
+            if !vars.contains_key(name) {
+                vars.insert(name.clone(), Type::Int);
+            }
         }
     }
 }
@@ -241,6 +279,14 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
     match stmt {
         Stmt::ExprStmt(e) => {
             gen_expr(e, cg, out);
+        }
+        Stmt::VarDecl(decl) => {
+            cg.add_var(decl.name.clone(), decl.ty.clone());
+            if let Some(ref init) = decl.init {
+                gen_expr(init, cg, out);
+                let addr = cg.var_addr(&decl.name);
+                out.push_str(&format!("    mov {}, rax\n", addr));
+            }
         }
         Stmt::Block(stmts) => {
             for s in stmts {
@@ -371,8 +417,8 @@ fn gen_cmp(lhs: &Expr, rhs: &Expr, cc: &str, cg: &mut CodeGen, out: &mut String)
 fn gen_addr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
     match expr {
         Expr::Ident(name) => {
-            let offset = cg.vars.get(name).expect(&format!("undefined variable: {}", name));
-            out.push_str(&format!("    lea rax, [rbp{}]\n", offset));
+            let info = cg.vars.get(name).expect(&format!("undefined variable: {}", name));
+            out.push_str(&format!("    lea rax, [rbp{}]\n", info.offset));
         }
         Expr::Deref(inner) => {
             gen_expr(inner, cg, out);
