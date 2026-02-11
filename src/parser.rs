@@ -10,6 +10,7 @@ pub enum Expr {
     Call(String, Vec<Expr>),
     Addr(Box<Expr>),
     Deref(Box<Expr>),
+    Index(Box<Expr>, Box<Expr>),  // arr[i]
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
@@ -102,10 +103,9 @@ pub fn parse_program(lexer: &mut Lexer) -> Program {
         if lexer.peek_token() == Token::Fn {
             functions.push(parse_fn_def(lexer));
         } else if is_type_specifier(&lexer.peek_token()) {
-            if let Some(func) = try_parse_typed_fn_def(lexer) {
-                functions.push(func);
-            } else {
-                main_body.push(parse_stmt(lexer));
+            match parse_typed_decl(lexer) {
+                TypedDecl::Func(func) => functions.push(func),
+                TypedDecl::Var(stmt) => main_body.push(stmt),
             }
         } else {
             main_body.push(parse_stmt(lexer));
@@ -169,19 +169,68 @@ fn parse_fn_def(lexer: &mut Lexer) -> FnDef {
     FnDef { name, ret_ty: None, params, body }
 }
 
-fn try_parse_typed_fn_def(lexer: &mut Lexer) -> Option<FnDef> {
-    let ret_ty = parse_type(lexer);
+enum TypedDecl {
+    Func(FnDef),
+    Var(Stmt),
+}
+
+fn parse_typed_decl(lexer: &mut Lexer) -> TypedDecl {
+    let mut ty = parse_type(lexer);
 
     let name = match lexer.consume_token() {
         Token::Ident(name) => name,
         t => panic!("expected identifier after type, got {:?}", t),
     };
 
-    if lexer.peek_token() != Token::LParen {
-        return None;
+    // Check for array declaration: int arr[10];
+    if lexer.peek_token() == Token::LBracket {
+        lexer.consume_token();
+        let size = match lexer.consume_token() {
+            Token::Num(n) => n as usize,
+            t => panic!("expected array size, got {:?}", t),
+        };
+        match lexer.consume_token() {
+            Token::RBracket => {}
+            t => panic!("expected ']', got {:?}", t),
+        }
+        ty = Type::Array(Box::new(ty), size);
+
+        // Handle initialization if present
+        let init = if lexer.peek_token() == Token::Eq {
+            lexer.consume_token();
+            Some(parse_assign(lexer))
+        } else {
+            None
+        };
+
+        match lexer.consume_token() {
+            Token::Semi => {}
+            t => panic!("expected ';' after variable declaration, got {:?}", t),
+        }
+
+        return TypedDecl::Var(Stmt::VarDecl(VarDecl { name, ty, init }));
     }
 
-    lexer.consume_token();
+    // Check if it's a function definition
+    if lexer.peek_token() != Token::LParen {
+        // It's a variable declaration
+        let init = if lexer.peek_token() == Token::Eq {
+            lexer.consume_token();
+            Some(parse_assign(lexer))
+        } else {
+            None
+        };
+
+        match lexer.consume_token() {
+            Token::Semi => {}
+            t => panic!("expected ';' after variable declaration, got {:?}", t),
+        }
+
+        return TypedDecl::Var(Stmt::VarDecl(VarDecl { name, ty, init }));
+    }
+
+    // It's a function definition
+    lexer.consume_token(); // consume '('
 
     let mut params = Vec::new();
     if lexer.peek_token() != Token::RParen {
@@ -221,7 +270,7 @@ fn try_parse_typed_fn_def(lexer: &mut Lexer) -> Option<FnDef> {
         t => panic!("expected '}}' after function body, got {:?}", t),
     }
 
-    Some(FnDef { name, ret_ty: Some(ret_ty), params, body })
+    TypedDecl::Func(FnDef { name, ret_ty: Some(ty), params, body })
 }
 
 fn parse_stmt(lexer: &mut Lexer) -> Stmt {
@@ -264,12 +313,26 @@ fn parse_stmt(lexer: &mut Lexer) -> Stmt {
 }
 
 fn parse_var_decl(lexer: &mut Lexer) -> Stmt {
-    let ty = parse_type(lexer);
+    let mut ty = parse_type(lexer);
 
     let name = match lexer.consume_token() {
         Token::Ident(name) => name,
         t => panic!("expected variable name, got {:?}", t),
     };
+
+    // Check for array declaration: int arr[10];
+    if lexer.peek_token() == Token::LBracket {
+        lexer.consume_token();
+        let size = match lexer.consume_token() {
+            Token::Num(n) => n as usize,
+            t => panic!("expected array size, got {:?}", t),
+        };
+        match lexer.consume_token() {
+            Token::RBracket => {}
+            t => panic!("expected ']', got {:?}", t),
+        }
+        ty = Type::Array(Box::new(ty), size);
+    }
 
     let init = if lexer.peek_token() == Token::Eq {
         lexer.consume_token();
@@ -312,6 +375,11 @@ fn parse_assign(lexer: &mut Lexer) -> Expr {
             match lhs {
                 Expr::Ident(name) => Expr::Assign(name, Box::new(rhs)),
                 Expr::Deref(inner) => Expr::DerefAssign(inner, Box::new(rhs)),
+                Expr::Index(arr, idx) => {
+                    // arr[i] = val becomes *(arr + i) = val
+                    let addr = Expr::Add(arr, idx);
+                    Expr::DerefAssign(Box::new(addr), Box::new(rhs))
+                }
                 _ => panic!("invalid assignment target"),
             }
         }
@@ -738,7 +806,7 @@ fn parse_factor(lexer: &mut Lexer) -> Expr {
         _ => match lexer.consume_token() {
             Token::Num(n) => Expr::Num(n),
             Token::Ident(name) => {
-                match lexer.peek_token() {
+                let mut expr = match lexer.peek_token() {
                     Token::PlusPlus => {
                         lexer.consume_token();
                         Expr::PostInc(name)
@@ -767,7 +835,18 @@ fn parse_factor(lexer: &mut Lexer) -> Expr {
                         Expr::Call(name, args)
                     }
                     _ => Expr::Ident(name),
+                };
+                // Handle array indexing: arr[i], arr[i][j], etc.
+                while lexer.peek_token() == Token::LBracket {
+                    lexer.consume_token();
+                    let index = parse_assign(lexer);
+                    match lexer.consume_token() {
+                        Token::RBracket => {}
+                        t => panic!("expected ']', got {:?}", t),
+                    }
+                    expr = Expr::Index(Box::new(expr), Box::new(index));
                 }
+                expr
             }
             Token::LParen => {
                 let node = parse_assign(lexer);

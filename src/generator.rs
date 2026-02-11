@@ -253,6 +253,10 @@ fn collect_vars_expr(expr: &Expr, vars: &mut HashMap<String, Type>) {
                 vars.insert(name.clone(), Type::Int);
             }
         }
+        Expr::Index(arr, idx) => {
+            collect_vars_expr(arr, vars);
+            collect_vars_expr(idx, vars);
+        }
     }
 }
 
@@ -414,6 +418,12 @@ fn gen_cmp(lhs: &Expr, rhs: &Expr, cc: &str, cg: &mut CodeGen, out: &mut String)
     out.push_str("    movzx rax, al\n");
 }
 
+#[allow(dead_code)]
+fn gen_cmp_typed(lhs: &Expr, rhs: &Expr, cc: &str, cg: &mut CodeGen, out: &mut String) -> Type {
+    gen_cmp(lhs, rhs, cc, cg, out);
+    Type::Int
+}
+
 fn gen_addr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
     match expr {
         Expr::Ident(name) => {
@@ -423,25 +433,52 @@ fn gen_addr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
         Expr::Deref(inner) => {
             gen_expr(inner, cg, out);
         }
+        Expr::Index(arr, idx) => {
+            // Address of arr[i] is arr + i * elem_size
+            let arr_ty = gen_expr(arr, cg, out);
+            out.push_str("    push rax\n");
+            gen_expr(idx, cg, out);
+
+            if let Some(elem_ty) = arr_ty.element_type() {
+                let elem_size = elem_ty.size();
+                if elem_size != 1 {
+                    out.push_str(&format!("    imul rax, {}\n", elem_size));
+                }
+            }
+            out.push_str("    pop rdi\n");
+            out.push_str("    add rax, rdi\n");
+        }
         _ => panic!("cannot take address of non-lvalue expression"),
     }
 }
 
-fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
+fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
     match expr {
-        Expr::Num(n) => {
-            out.push_str(&format!("    mov rax, {}\n", n));
+        Expr::Num(_) => {
+            gen_expr_no_type(expr, cg, out);
+            Type::Int
         }
 
         Expr::Ident(name) => {
-            let addr = cg.var_addr(name);
-            out.push_str(&format!("    mov rax, {}\n", addr));
+            let info = cg.vars.get(name).expect(&format!("undefined variable: {}", name));
+            let ty = info.ty.clone();
+            let offset = info.offset;
+
+            // For arrays, return address (arrays decay to pointers)
+            if let Type::Array(elem, _) = &ty {
+                out.push_str(&format!("    lea rax, [rbp{}]\n", offset));
+                Type::Ptr(elem.clone())
+            } else {
+                out.push_str(&format!("    mov rax, [rbp{}]\n", offset));
+                ty
+            }
         }
 
         Expr::Assign(name, rhs) => {
-            gen_expr(rhs, cg, out);
+            let ty = gen_expr(rhs, cg, out);
             let addr = cg.var_addr(name);
             out.push_str(&format!("    mov {}, rax\n", addr));
+            ty
         }
 
         Expr::Call(name, args) => {
@@ -460,48 +497,155 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             }
 
             out.push_str(&format!("    call {}\n", name));
+            Type::Int // function return type assumed to be int for now
         }
 
         Expr::Addr(inner) => {
+            let inner_ty = get_expr_type(inner, cg);
             gen_addr(inner, cg, out);
+            Type::Ptr(Box::new(inner_ty))
         }
 
         Expr::Deref(inner) => {
-            gen_expr(inner, cg, out);
-            out.push_str("    mov rax, [rax]\n");
+            let inner_ty = gen_expr(inner, cg, out);
+            if let Some(elem_ty) = inner_ty.element_type() {
+                let elem_size = elem_ty.size();
+                if elem_size == 1 {
+                    out.push_str("    movzx rax, byte ptr [rax]\n");
+                } else {
+                    out.push_str("    mov rax, [rax]\n");
+                }
+                elem_ty.clone()
+            } else {
+                out.push_str("    mov rax, [rax]\n");
+                Type::Int
+            }
+        }
+
+        Expr::Index(arr, idx) => {
+            // arr[i] is equivalent to *(arr + i)
+            let arr_ty = gen_expr(arr, cg, out);
+            out.push_str("    push rax\n");
+            gen_expr(idx, cg, out);
+
+            // Scale index by element size
+            if let Some(elem_ty) = arr_ty.element_type() {
+                let elem_size = elem_ty.size();
+                if elem_size != 1 {
+                    out.push_str(&format!("    imul rax, {}\n", elem_size));
+                }
+                out.push_str("    pop rdi\n");
+                out.push_str("    add rax, rdi\n");
+
+                // Dereference
+                if elem_size == 1 {
+                    out.push_str("    movzx rax, byte ptr [rax]\n");
+                } else {
+                    out.push_str("    mov rax, [rax]\n");
+                }
+                elem_ty.clone()
+            } else {
+                out.push_str("    pop rdi\n");
+                out.push_str("    add rax, rdi\n");
+                out.push_str("    mov rax, [rax]\n");
+                Type::Int
+            }
         }
 
         Expr::DerefAssign(addr, value) => {
+            // Get element type from addr expression
+            let addr_ty = get_expr_type(addr, cg);
+            let elem_ty = addr_ty.element_type().cloned().unwrap_or(Type::Int);
+            let elem_size = elem_ty.size();
+
             gen_expr(value, cg, out);
             out.push_str("    push rax\n");
             gen_expr(addr, cg, out);
             out.push_str("    pop rdi\n");
-            out.push_str("    mov [rax], rdi\n");
+
+            if elem_size == 1 {
+                out.push_str("    mov [rax], dil\n");
+            } else {
+                out.push_str("    mov [rax], rdi\n");
+            }
             out.push_str("    mov rax, rdi\n");
+            elem_ty
         }
 
         Expr::Add(lhs, rhs) => {
-            gen_expr(lhs, cg, out);
+            let lhs_ty = gen_expr(lhs, cg, out);
             out.push_str("    push rax\n");
-            gen_expr(rhs, cg, out);
+            let rhs_ty = gen_expr(rhs, cg, out);
             out.push_str("    pop rdi\n");
-            out.push_str("    add rax, rdi\n");
+
+            // Pointer arithmetic: scale the integer operand
+            if let Some(elem_ty) = lhs_ty.element_type() {
+                // lhs is pointer/array, scale rhs
+                let elem_size = elem_ty.size();
+                if elem_size != 1 {
+                    out.push_str(&format!("    imul rax, {}\n", elem_size));
+                }
+                out.push_str("    add rax, rdi\n");
+                lhs_ty
+            } else if let Some(elem_ty) = rhs_ty.element_type() {
+                // rhs is pointer/array, scale lhs (in rdi)
+                let elem_size = elem_ty.size();
+                if elem_size != 1 {
+                    out.push_str(&format!("    imul rdi, {}\n", elem_size));
+                }
+                out.push_str("    add rax, rdi\n");
+                rhs_ty
+            } else {
+                out.push_str("    add rax, rdi\n");
+                Type::Int
+            }
         }
+
         Expr::Sub(lhs, rhs) => {
-            gen_expr(lhs, cg, out);
+            let lhs_ty = gen_expr(lhs, cg, out);
             out.push_str("    push rax\n");
-            gen_expr(rhs, cg, out);
+            let rhs_ty = gen_expr(rhs, cg, out);
             out.push_str("    pop rdi\n");
-            out.push_str("    sub rdi, rax\n");
-            out.push_str("    mov rax, rdi\n");
+
+            // Pointer arithmetic: scale the integer operand
+            if let Some(elem_ty) = lhs_ty.element_type() {
+                if rhs_ty.is_pointer() {
+                    // pointer - pointer: result is scaled by element size
+                    out.push_str("    sub rdi, rax\n");
+                    out.push_str("    mov rax, rdi\n");
+                    let elem_size = elem_ty.size();
+                    if elem_size != 1 {
+                        out.push_str("    cqo\n");
+                        out.push_str(&format!("    mov rdi, {}\n", elem_size));
+                        out.push_str("    idiv rdi\n");
+                    }
+                    Type::Int
+                } else {
+                    // pointer - int: scale the int
+                    let elem_size = elem_ty.size();
+                    if elem_size != 1 {
+                        out.push_str(&format!("    imul rax, {}\n", elem_size));
+                    }
+                    out.push_str("    sub rdi, rax\n");
+                    out.push_str("    mov rax, rdi\n");
+                    lhs_ty
+                }
+            } else {
+                out.push_str("    sub rdi, rax\n");
+                out.push_str("    mov rax, rdi\n");
+                Type::Int
+            }
         }
+
         Expr::Mul(lhs, rhs) => {
             gen_expr(lhs, cg, out);
             out.push_str("    push rax\n");
             gen_expr(rhs, cg, out);
             out.push_str("    pop rdi\n");
             out.push_str("    imul rax, rdi\n");
+            Type::Int
         }
+
         Expr::Div(lhs, rhs) => {
             gen_expr(lhs, cg, out);
             out.push_str("    push rax\n");
@@ -510,6 +654,7 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    pop rax\n");
             out.push_str("    cqo\n");
             out.push_str("    idiv rdi\n");
+            Type::Int
         }
 
         Expr::Mod(lhs, rhs) => {
@@ -521,11 +666,13 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    cqo\n");
             out.push_str("    idiv rdi\n");
             out.push_str("    mov rax, rdx\n");
+            Type::Int
         }
 
         Expr::Neg(inner) => {
             gen_expr(inner, cg, out);
             out.push_str("    neg rax\n");
+            Type::Int
         }
 
         Expr::Not(inner) => {
@@ -533,6 +680,7 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    cmp rax, 0\n");
             out.push_str("    sete al\n");
             out.push_str("    movzx rax, al\n");
+            Type::Int
         }
 
         Expr::And(lhs, rhs) => {
@@ -554,6 +702,7 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    mov rax, 0\n");
 
             out.push_str(&format!("{}:\n", l_end));
+            Type::Int
         }
 
         Expr::Or(lhs, rhs) => {
@@ -575,14 +724,15 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    mov rax, 1\n");
 
             out.push_str(&format!("{}:\n", l_end));
+            Type::Int
         }
 
-        Expr::EqEq(lhs, rhs) => gen_cmp(lhs, rhs, "e", cg, out),
-        Expr::Ne(lhs, rhs) => gen_cmp(lhs, rhs, "ne", cg, out),
-        Expr::Lt(lhs, rhs) => gen_cmp(lhs, rhs, "l", cg, out),
-        Expr::Le(lhs, rhs) => gen_cmp(lhs, rhs, "le", cg, out),
-        Expr::Gt(lhs, rhs) => gen_cmp(lhs, rhs, "g", cg, out),
-        Expr::Ge(lhs, rhs) => gen_cmp(lhs, rhs, "ge", cg, out),
+        Expr::EqEq(lhs, rhs) => { gen_cmp(lhs, rhs, "e", cg, out); Type::Int }
+        Expr::Ne(lhs, rhs) => { gen_cmp(lhs, rhs, "ne", cg, out); Type::Int }
+        Expr::Lt(lhs, rhs) => { gen_cmp(lhs, rhs, "l", cg, out); Type::Int }
+        Expr::Le(lhs, rhs) => { gen_cmp(lhs, rhs, "le", cg, out); Type::Int }
+        Expr::Gt(lhs, rhs) => { gen_cmp(lhs, rhs, "g", cg, out); Type::Int }
+        Expr::Ge(lhs, rhs) => { gen_cmp(lhs, rhs, "ge", cg, out); Type::Int }
 
         Expr::BitAnd(lhs, rhs) => {
             gen_expr(lhs, cg, out);
@@ -590,6 +740,7 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             gen_expr(rhs, cg, out);
             out.push_str("    pop rdi\n");
             out.push_str("    and rax, rdi\n");
+            Type::Int
         }
         Expr::BitOr(lhs, rhs) => {
             gen_expr(lhs, cg, out);
@@ -597,6 +748,7 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             gen_expr(rhs, cg, out);
             out.push_str("    pop rdi\n");
             out.push_str("    or rax, rdi\n");
+            Type::Int
         }
         Expr::BitXor(lhs, rhs) => {
             gen_expr(lhs, cg, out);
@@ -604,10 +756,12 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             gen_expr(rhs, cg, out);
             out.push_str("    pop rdi\n");
             out.push_str("    xor rax, rdi\n");
+            Type::Int
         }
         Expr::BitNot(inner) => {
             gen_expr(inner, cg, out);
             out.push_str("    not rax\n");
+            Type::Int
         }
         Expr::Shl(lhs, rhs) => {
             gen_expr(lhs, cg, out);
@@ -616,6 +770,7 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    mov rcx, rax\n");
             out.push_str("    pop rax\n");
             out.push_str("    shl rax, cl\n");
+            Type::Int
         }
         Expr::Shr(lhs, rhs) => {
             gen_expr(lhs, cg, out);
@@ -624,6 +779,7 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    mov rcx, rax\n");
             out.push_str("    pop rax\n");
             out.push_str("    sar rax, cl\n");
+            Type::Int
         }
 
         Expr::PreInc(name) => {
@@ -631,12 +787,14 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str(&format!("    mov rax, {}\n", addr));
             out.push_str("    add rax, 1\n");
             out.push_str(&format!("    mov {}, rax\n", addr));
+            Type::Int
         }
         Expr::PreDec(name) => {
             let addr = cg.var_addr(&name);
             out.push_str(&format!("    mov rax, {}\n", addr));
             out.push_str("    sub rax, 1\n");
             out.push_str(&format!("    mov {}, rax\n", addr));
+            Type::Int
         }
         Expr::PostInc(name) => {
             let addr = cg.var_addr(&name);
@@ -644,6 +802,7 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    mov rdi, rax\n");
             out.push_str("    add rdi, 1\n");
             out.push_str(&format!("    mov {}, rdi\n", addr));
+            Type::Int
         }
         Expr::PostDec(name) => {
             let addr = cg.var_addr(&name);
@@ -651,6 +810,56 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
             out.push_str("    mov rdi, rax\n");
             out.push_str("    sub rdi, 1\n");
             out.push_str(&format!("    mov {}, rdi\n", addr));
+            Type::Int
         }
+    }
+}
+
+// Helper to generate expression without needing type
+fn gen_expr_no_type(expr: &Expr, _cg: &mut CodeGen, out: &mut String) {
+    match expr {
+        Expr::Num(n) => {
+            out.push_str(&format!("    mov rax, {}\n", n));
+        }
+        _ => panic!("gen_expr_no_type: unsupported expression"),
+    }
+}
+
+// Get type of expression without generating code
+fn get_expr_type(expr: &Expr, cg: &CodeGen) -> Type {
+    match expr {
+        Expr::Num(_) => Type::Int,
+        Expr::Ident(name) => {
+            let info = cg.vars.get(name).expect(&format!("undefined variable: {}", name));
+            if let Type::Array(elem, _) = &info.ty {
+                Type::Ptr(elem.clone())
+            } else {
+                info.ty.clone()
+            }
+        }
+        Expr::Addr(inner) => {
+            let inner_ty = get_expr_type(inner, cg);
+            Type::Ptr(Box::new(inner_ty))
+        }
+        Expr::Deref(inner) => {
+            let inner_ty = get_expr_type(inner, cg);
+            inner_ty.element_type().cloned().unwrap_or(Type::Int)
+        }
+        Expr::Index(arr, _) => {
+            let arr_ty = get_expr_type(arr, cg);
+            arr_ty.element_type().cloned().unwrap_or(Type::Int)
+        }
+        Expr::Add(lhs, rhs) => {
+            let lhs_ty = get_expr_type(lhs, cg);
+            let rhs_ty = get_expr_type(rhs, cg);
+            if lhs_ty.is_pointer() { lhs_ty }
+            else if rhs_ty.is_pointer() { rhs_ty }
+            else { Type::Int }
+        }
+        Expr::Sub(lhs, _) => {
+            let lhs_ty = get_expr_type(lhs, cg);
+            if lhs_ty.is_pointer() { lhs_ty } else { Type::Int }
+        }
+        _ => Type::Int,
     }
 }

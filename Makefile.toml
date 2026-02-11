@@ -87,6 +87,12 @@ script = '''
 ./debug.sh 15 "fn add_to(p, v) { *p = *p + v; } x = 10; add_to(&x, 5); x;"
 ./debug.sh 77 "fn swap(p, q) { t = *p; *p = *q; *q = t; } a = 55; b = 77; swap(&a, &b); a;"
 ./debug.sh 55 "fn swap(p, q) { t = *p; *p = *q; *q = t; } a = 55; b = 77; swap(&a, &b); b;"
+# Array tests
+./debug.sh 6 "int a[3]; a[0]=1; a[1]=2; a[2]=3; a[0]+a[1]+a[2];"
+./debug.sh 20 "int a[2]; a[0]=10; a[1]=20; int *p=a; *(p+1);"
+./debug.sh 30 "int a[3]; a[0]=10; a[1]=20; a[2]=30; int *p=a; *(p+2);"
+./debug.sh 10 "int a[2]; a[0]=10; a[1]=20; int *p=a; *p;"
+./debug.sh 3 "int a[5]; a[0]=1; a[1]=2; a[2]=3; a[3]=4; a[4]=5; a[2];"
 '''
 dependencies = [ "build" ]
 
