@@ -36,6 +36,7 @@ pub enum Expr {
     PreDec(String),   // --i
     PostInc(String),  // i++
     PostDec(String),  // i--
+    Str(Vec<u8>),     // "hello"
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -805,6 +806,19 @@ fn parse_factor(lexer: &mut Lexer) -> Expr {
         }
         _ => match lexer.consume_token() {
             Token::Num(n) => Expr::Num(n),
+            Token::Str(s) => {
+                let mut expr = Expr::Str(s);
+                while lexer.peek_token() == Token::LBracket {
+                    lexer.consume_token();
+                    let index = parse_assign(lexer);
+                    match lexer.consume_token() {
+                        Token::RBracket => {}
+                        t => panic!("expected ']', got {:?}", t),
+                    }
+                    expr = Expr::Index(Box::new(expr), Box::new(index));
+                }
+                expr
+            }
             Token::Ident(name) => {
                 let mut expr = match lexer.peek_token() {
                     Token::PlusPlus => {

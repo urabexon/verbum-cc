@@ -52,6 +52,7 @@ pub enum Token {
     Int,
     Char,
     Void,
+    Str(Vec<u8>),
 }
 
 pub struct Lexer<'a> {
@@ -323,6 +324,37 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
 
             return Token::Num(ch as i64);
+        }
+
+        if c == b'"' {
+            self.pos += 1;
+            let mut bytes = Vec::new();
+            while self.pos < self.input.len() && self.input[self.pos] != b'"' {
+                if self.input[self.pos] == b'\\' {
+                    self.pos += 1;
+                    if self.pos >= self.input.len() {
+                        panic!("unexpected end of input in escape sequence");
+                    }
+                    let escaped = match self.input[self.pos] {
+                        b'n' => b'\n',
+                        b't' => b'\t',
+                        b'r' => b'\r',
+                        b'\\' => b'\\',
+                        b'"' => b'"',
+                        b'0' => 0,
+                        c => panic!("unknown escape sequence: \\{}", c as char),
+                    };
+                    bytes.push(escaped);
+                } else {
+                    bytes.push(self.input[self.pos]);
+                }
+                self.pos += 1;
+            }
+            if self.pos >= self.input.len() {
+                panic!("unexpected end of input in string literal");
+            }
+            self.pos += 1; // skip closing "
+            return Token::Str(bytes);
         }
 
         if c.is_ascii_digit() {

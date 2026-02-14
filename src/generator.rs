@@ -8,6 +8,24 @@ struct VarInfo {
     ty: Type,
 }
 
+struct StringPool {
+    strings: Vec<(String, Vec<u8>)>,
+    counter: usize,
+}
+
+impl StringPool {
+    fn new() -> Self {
+        Self { strings: Vec::new(), counter: 0 }
+    }
+
+    fn add(&mut self, bytes: Vec<u8>) -> String {
+        let label = format!(".Lstr_{}", self.counter);
+        self.counter += 1;
+        self.strings.push((label.clone(), bytes));
+        label
+    }
+}
+
 struct CodeGen {
     vars: HashMap<String, VarInfo>,
     stack_size: i64,
@@ -79,10 +97,11 @@ impl CodeGen {
 
 pub fn gen_program(prog: &Program) -> String {
     let mut out = String::new();
+    let mut pool = StringPool::new();
     out.push_str(".intel_syntax noprefix\n");
 
     for func in &prog.functions {
-        gen_function(func, &mut out);
+        gen_function(func, &mut out, &mut pool);
     }
 
     out.push_str(".global _start\n\n_start:\n");
@@ -100,7 +119,7 @@ pub fn gen_program(prog: &Program) -> String {
         out.push_str("    mov rax, 0\n");
     } else {
         for stmt in &prog.main_body {
-            gen_stmt(stmt, &mut cg, &mut out);
+            gen_stmt(stmt, &mut cg, &mut out, &mut pool);
         }
     }
 
@@ -110,10 +129,22 @@ pub fn gen_program(prog: &Program) -> String {
     out.push_str("    mov rdi, rax\n");
     out.push_str("    mov rax, 60\n");
     out.push_str("    syscall\n");
+
+    // Emit .rodata section for string literals
+    if !pool.strings.is_empty() {
+        out.push_str("\n.section .rodata\n");
+        for (label, bytes) in &pool.strings {
+            out.push_str(&format!("{}:\n", label));
+            let byte_strs: Vec<String> = bytes.iter().map(|b| b.to_string()).collect();
+            // Append null terminator
+            out.push_str(&format!("    .byte {}, 0\n", byte_strs.join(", ")));
+        }
+    }
+
     out
 }
 
-fn gen_function(func: &FnDef, out: &mut String) {
+fn gen_function(func: &FnDef, out: &mut String, pool: &mut StringPool) {
     let var_infos = collect_vars_stmts(&func.body);
     let mut cg = CodeGen::new(var_infos, &func.params);
 
@@ -138,7 +169,7 @@ fn gen_function(func: &FnDef, out: &mut String) {
     }
 
     for stmt in &func.body {
-        gen_stmt(stmt, &mut cg, out);
+        gen_stmt(stmt, &mut cg, out, pool);
     }
 
     out.push_str("    mov rax, 0\n");
@@ -203,7 +234,7 @@ fn collect_vars_stmt(stmt: &Stmt, vars: &mut HashMap<String, Type>) {
 
 fn collect_vars_expr(expr: &Expr, vars: &mut HashMap<String, Type>) {
     match expr {
-        Expr::Num(_) => {}
+        Expr::Num(_) | Expr::Str(_) => {}
         Expr::Ident(name) => {
             if !vars.contains_key(name) {
                 vars.insert(name.clone(), Type::Int);
@@ -279,37 +310,37 @@ impl LabelGen {
     }
 }
 
-fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
+fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String, pool: &mut StringPool) {
     match stmt {
         Stmt::ExprStmt(e) => {
-            gen_expr(e, cg, out);
+            gen_expr(e, cg, out, pool);
         }
         Stmt::VarDecl(decl) => {
             cg.add_var(decl.name.clone(), decl.ty.clone());
             if let Some(ref init) = decl.init {
-                gen_expr(init, cg, out);
+                gen_expr(init, cg, out, pool);
                 let addr = cg.var_addr(&decl.name);
                 out.push_str(&format!("    mov {}, rax\n", addr));
             }
         }
         Stmt::Block(stmts) => {
             for s in stmts {
-                gen_stmt(s, cg, out);
+                gen_stmt(s, cg, out, pool);
             }
         }
         Stmt::If { cond, then, els } => {
             let l_else = cg.label_gen.next("else");
             let l_end = cg.label_gen.next("endif");
 
-            gen_expr(cond, cg, out);
+            gen_expr(cond, cg, out, pool);
             out.push_str("    cmp rax, 0\n");
             out.push_str(&format!("    je {}\n", l_else));
 
-            gen_stmt(then, cg, out);
+            gen_stmt(then, cg, out, pool);
             out.push_str(&format!("    jmp {}\n", l_end));
 
             out.push_str(&format!("{}:\n", l_else));
-            gen_stmt(els, cg, out);
+            gen_stmt(els, cg, out, pool);
 
             out.push_str(&format!("{}:\n", l_end));
         }
@@ -321,11 +352,11 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
             cg.continue_labels.push(l_begin.clone());
 
             out.push_str(&format!("{}:\n", l_begin));
-            gen_expr(cond, cg, out);
+            gen_expr(cond, cg, out, pool);
             out.push_str("    cmp rax, 0\n");
             out.push_str(&format!("    je {}\n", l_end));
 
-            gen_stmt(body, cg, out);
+            gen_stmt(body, cg, out, pool);
             out.push_str(&format!("    jmp {}\n", l_begin));
 
             out.push_str(&format!("{}:\n", l_end));
@@ -339,20 +370,20 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
             let l_continue = cg.label_gen.next("for_continue");
             let l_end = cg.label_gen.next("for_end");
 
-            gen_expr(init, cg, out);
+            gen_expr(init, cg, out, pool);
 
             cg.break_labels.push(l_end.clone());
             cg.continue_labels.push(l_continue.clone());
 
             out.push_str(&format!("{}:\n", l_begin));
-            gen_expr(cond, cg, out);
+            gen_expr(cond, cg, out, pool);
             out.push_str("    cmp rax, 0\n");
             out.push_str(&format!("    je {}\n", l_end));
 
-            gen_stmt(body, cg, out);
+            gen_stmt(body, cg, out, pool);
 
             out.push_str(&format!("{}:\n", l_continue));
-            gen_expr(update, cg, out);
+            gen_expr(update, cg, out, pool);
             out.push_str(&format!("    jmp {}\n", l_begin));
 
             out.push_str(&format!("{}:\n", l_end));
@@ -370,10 +401,10 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
             cg.continue_labels.push(l_cond.clone());
 
             out.push_str(&format!("{}:\n", l_begin));
-            gen_stmt(body, cg, out);
+            gen_stmt(body, cg, out, pool);
 
             out.push_str(&format!("{}:\n", l_cond));
-            gen_expr(cond, cg, out);
+            gen_expr(cond, cg, out, pool);
             out.push_str("    cmp rax, 0\n");
             out.push_str(&format!("    jne {}\n", l_begin));
 
@@ -384,7 +415,7 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
         }
 
         Stmt::Return(expr) => {
-            gen_expr(expr, cg, out);
+            gen_expr(expr, cg, out, pool);
             if let Some(ref label) = cg.return_label {
                 out.push_str(&format!("    jmp {}\n", label));
             }
@@ -408,10 +439,10 @@ fn gen_stmt(stmt: &Stmt, cg: &mut CodeGen, out: &mut String) {
     }
 }
 
-fn gen_cmp(lhs: &Expr, rhs: &Expr, cc: &str, cg: &mut CodeGen, out: &mut String) {
-    gen_expr(lhs, cg, out);
+fn gen_cmp(lhs: &Expr, rhs: &Expr, cc: &str, cg: &mut CodeGen, out: &mut String, pool: &mut StringPool) {
+    gen_expr(lhs, cg, out, pool);
     out.push_str("    push rax\n");
-    gen_expr(rhs, cg, out);
+    gen_expr(rhs, cg, out, pool);
     out.push_str("    pop rdi\n");
     out.push_str("    cmp rdi, rax\n");
     out.push_str(&format!("    set{} al\n", cc));
@@ -419,25 +450,25 @@ fn gen_cmp(lhs: &Expr, rhs: &Expr, cc: &str, cg: &mut CodeGen, out: &mut String)
 }
 
 #[allow(dead_code)]
-fn gen_cmp_typed(lhs: &Expr, rhs: &Expr, cc: &str, cg: &mut CodeGen, out: &mut String) -> Type {
-    gen_cmp(lhs, rhs, cc, cg, out);
+fn gen_cmp_typed(lhs: &Expr, rhs: &Expr, cc: &str, cg: &mut CodeGen, out: &mut String, pool: &mut StringPool) -> Type {
+    gen_cmp(lhs, rhs, cc, cg, out, pool);
     Type::Int
 }
 
-fn gen_addr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
+fn gen_addr(expr: &Expr, cg: &mut CodeGen, out: &mut String, pool: &mut StringPool) {
     match expr {
         Expr::Ident(name) => {
             let info = cg.vars.get(name).expect(&format!("undefined variable: {}", name));
             out.push_str(&format!("    lea rax, [rbp{}]\n", info.offset));
         }
         Expr::Deref(inner) => {
-            gen_expr(inner, cg, out);
+            gen_expr(inner, cg, out, pool);
         }
         Expr::Index(arr, idx) => {
             // Address of arr[i] is arr + i * elem_size
-            let arr_ty = gen_expr(arr, cg, out);
+            let arr_ty = gen_expr(arr, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(idx, cg, out);
+            gen_expr(idx, cg, out, pool);
 
             if let Some(elem_ty) = arr_ty.element_type() {
                 let elem_size = elem_ty.size();
@@ -452,11 +483,17 @@ fn gen_addr(expr: &Expr, cg: &mut CodeGen, out: &mut String) {
     }
 }
 
-fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
+fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String, pool: &mut StringPool) -> Type {
     match expr {
         Expr::Num(_) => {
             gen_expr_no_type(expr, cg, out);
             Type::Int
+        }
+
+        Expr::Str(bytes) => {
+            let label = pool.add(bytes.clone());
+            out.push_str(&format!("    lea rax, [rip+{}]\n", label));
+            Type::Ptr(Box::new(Type::Char))
         }
 
         Expr::Ident(name) => {
@@ -475,7 +512,7 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
         }
 
         Expr::Assign(name, rhs) => {
-            let ty = gen_expr(rhs, cg, out);
+            let ty = gen_expr(rhs, cg, out, pool);
             let addr = cg.var_addr(name);
             out.push_str(&format!("    mov {}, rax\n", addr));
             ty
@@ -487,7 +524,7 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
             }
 
             for arg in args.iter() {
-                gen_expr(arg, cg, out);
+                gen_expr(arg, cg, out, pool);
                 out.push_str("    push rax\n");
             }
 
@@ -502,12 +539,12 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
 
         Expr::Addr(inner) => {
             let inner_ty = get_expr_type(inner, cg);
-            gen_addr(inner, cg, out);
+            gen_addr(inner, cg, out, pool);
             Type::Ptr(Box::new(inner_ty))
         }
 
         Expr::Deref(inner) => {
-            let inner_ty = gen_expr(inner, cg, out);
+            let inner_ty = gen_expr(inner, cg, out, pool);
             if let Some(elem_ty) = inner_ty.element_type() {
                 let elem_size = elem_ty.size();
                 if elem_size == 1 {
@@ -524,9 +561,9 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
 
         Expr::Index(arr, idx) => {
             // arr[i] is equivalent to *(arr + i)
-            let arr_ty = gen_expr(arr, cg, out);
+            let arr_ty = gen_expr(arr, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(idx, cg, out);
+            gen_expr(idx, cg, out, pool);
 
             // Scale index by element size
             if let Some(elem_ty) = arr_ty.element_type() {
@@ -558,9 +595,9 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
             let elem_ty = addr_ty.element_type().cloned().unwrap_or(Type::Int);
             let elem_size = elem_ty.size();
 
-            gen_expr(value, cg, out);
+            gen_expr(value, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(addr, cg, out);
+            gen_expr(addr, cg, out, pool);
             out.push_str("    pop rdi\n");
 
             if elem_size == 1 {
@@ -573,9 +610,9 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
         }
 
         Expr::Add(lhs, rhs) => {
-            let lhs_ty = gen_expr(lhs, cg, out);
+            let lhs_ty = gen_expr(lhs, cg, out, pool);
             out.push_str("    push rax\n");
-            let rhs_ty = gen_expr(rhs, cg, out);
+            let rhs_ty = gen_expr(rhs, cg, out, pool);
             out.push_str("    pop rdi\n");
 
             // Pointer arithmetic: scale the integer operand
@@ -602,9 +639,9 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
         }
 
         Expr::Sub(lhs, rhs) => {
-            let lhs_ty = gen_expr(lhs, cg, out);
+            let lhs_ty = gen_expr(lhs, cg, out, pool);
             out.push_str("    push rax\n");
-            let rhs_ty = gen_expr(rhs, cg, out);
+            let rhs_ty = gen_expr(rhs, cg, out, pool);
             out.push_str("    pop rdi\n");
 
             // Pointer arithmetic: scale the integer operand
@@ -638,18 +675,18 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
         }
 
         Expr::Mul(lhs, rhs) => {
-            gen_expr(lhs, cg, out);
+            gen_expr(lhs, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(rhs, cg, out);
+            gen_expr(rhs, cg, out, pool);
             out.push_str("    pop rdi\n");
             out.push_str("    imul rax, rdi\n");
             Type::Int
         }
 
         Expr::Div(lhs, rhs) => {
-            gen_expr(lhs, cg, out);
+            gen_expr(lhs, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(rhs, cg, out);
+            gen_expr(rhs, cg, out, pool);
             out.push_str("    mov rdi, rax\n");
             out.push_str("    pop rax\n");
             out.push_str("    cqo\n");
@@ -658,9 +695,9 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
         }
 
         Expr::Mod(lhs, rhs) => {
-            gen_expr(lhs, cg, out);
+            gen_expr(lhs, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(rhs, cg, out);
+            gen_expr(rhs, cg, out, pool);
             out.push_str("    mov rdi, rax\n");
             out.push_str("    pop rax\n");
             out.push_str("    cqo\n");
@@ -670,13 +707,13 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
         }
 
         Expr::Neg(inner) => {
-            gen_expr(inner, cg, out);
+            gen_expr(inner, cg, out, pool);
             out.push_str("    neg rax\n");
             Type::Int
         }
 
         Expr::Not(inner) => {
-            gen_expr(inner, cg, out);
+            gen_expr(inner, cg, out, pool);
             out.push_str("    cmp rax, 0\n");
             out.push_str("    sete al\n");
             out.push_str("    movzx rax, al\n");
@@ -687,11 +724,11 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
             let l_false = cg.label_gen.next("and_false");
             let l_end = cg.label_gen.next("and_end");
 
-            gen_expr(lhs, cg, out);
+            gen_expr(lhs, cg, out, pool);
             out.push_str("    cmp rax, 0\n");
             out.push_str(&format!("    je {}\n", l_false));
 
-            gen_expr(rhs, cg, out);
+            gen_expr(rhs, cg, out, pool);
             out.push_str("    cmp rax, 0\n");
             out.push_str(&format!("    je {}\n", l_false));
 
@@ -709,11 +746,11 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
             let l_true = cg.label_gen.next("or_true");
             let l_end = cg.label_gen.next("or_end");
 
-            gen_expr(lhs, cg, out);
+            gen_expr(lhs, cg, out, pool);
             out.push_str("    cmp rax, 0\n");
             out.push_str(&format!("    jne {}\n", l_true));
 
-            gen_expr(rhs, cg, out);
+            gen_expr(rhs, cg, out, pool);
             out.push_str("    cmp rax, 0\n");
             out.push_str(&format!("    jne {}\n", l_true));
 
@@ -727,55 +764,55 @@ fn gen_expr(expr: &Expr, cg: &mut CodeGen, out: &mut String) -> Type {
             Type::Int
         }
 
-        Expr::EqEq(lhs, rhs) => { gen_cmp(lhs, rhs, "e", cg, out); Type::Int }
-        Expr::Ne(lhs, rhs) => { gen_cmp(lhs, rhs, "ne", cg, out); Type::Int }
-        Expr::Lt(lhs, rhs) => { gen_cmp(lhs, rhs, "l", cg, out); Type::Int }
-        Expr::Le(lhs, rhs) => { gen_cmp(lhs, rhs, "le", cg, out); Type::Int }
-        Expr::Gt(lhs, rhs) => { gen_cmp(lhs, rhs, "g", cg, out); Type::Int }
-        Expr::Ge(lhs, rhs) => { gen_cmp(lhs, rhs, "ge", cg, out); Type::Int }
+        Expr::EqEq(lhs, rhs) => { gen_cmp(lhs, rhs, "e", cg, out, pool); Type::Int }
+        Expr::Ne(lhs, rhs) => { gen_cmp(lhs, rhs, "ne", cg, out, pool); Type::Int }
+        Expr::Lt(lhs, rhs) => { gen_cmp(lhs, rhs, "l", cg, out, pool); Type::Int }
+        Expr::Le(lhs, rhs) => { gen_cmp(lhs, rhs, "le", cg, out, pool); Type::Int }
+        Expr::Gt(lhs, rhs) => { gen_cmp(lhs, rhs, "g", cg, out, pool); Type::Int }
+        Expr::Ge(lhs, rhs) => { gen_cmp(lhs, rhs, "ge", cg, out, pool); Type::Int }
 
         Expr::BitAnd(lhs, rhs) => {
-            gen_expr(lhs, cg, out);
+            gen_expr(lhs, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(rhs, cg, out);
+            gen_expr(rhs, cg, out, pool);
             out.push_str("    pop rdi\n");
             out.push_str("    and rax, rdi\n");
             Type::Int
         }
         Expr::BitOr(lhs, rhs) => {
-            gen_expr(lhs, cg, out);
+            gen_expr(lhs, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(rhs, cg, out);
+            gen_expr(rhs, cg, out, pool);
             out.push_str("    pop rdi\n");
             out.push_str("    or rax, rdi\n");
             Type::Int
         }
         Expr::BitXor(lhs, rhs) => {
-            gen_expr(lhs, cg, out);
+            gen_expr(lhs, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(rhs, cg, out);
+            gen_expr(rhs, cg, out, pool);
             out.push_str("    pop rdi\n");
             out.push_str("    xor rax, rdi\n");
             Type::Int
         }
         Expr::BitNot(inner) => {
-            gen_expr(inner, cg, out);
+            gen_expr(inner, cg, out, pool);
             out.push_str("    not rax\n");
             Type::Int
         }
         Expr::Shl(lhs, rhs) => {
-            gen_expr(lhs, cg, out);
+            gen_expr(lhs, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(rhs, cg, out);
+            gen_expr(rhs, cg, out, pool);
             out.push_str("    mov rcx, rax\n");
             out.push_str("    pop rax\n");
             out.push_str("    shl rax, cl\n");
             Type::Int
         }
         Expr::Shr(lhs, rhs) => {
-            gen_expr(lhs, cg, out);
+            gen_expr(lhs, cg, out, pool);
             out.push_str("    push rax\n");
-            gen_expr(rhs, cg, out);
+            gen_expr(rhs, cg, out, pool);
             out.push_str("    mov rcx, rax\n");
             out.push_str("    pop rax\n");
             out.push_str("    sar rax, cl\n");
@@ -829,6 +866,7 @@ fn gen_expr_no_type(expr: &Expr, _cg: &mut CodeGen, out: &mut String) {
 fn get_expr_type(expr: &Expr, cg: &CodeGen) -> Type {
     match expr {
         Expr::Num(_) => Type::Int,
+        Expr::Str(_) => Type::Ptr(Box::new(Type::Char)),
         Expr::Ident(name) => {
             let info = cg.vars.get(name).expect(&format!("undefined variable: {}", name));
             if let Type::Array(elem, _) = &info.ty {
